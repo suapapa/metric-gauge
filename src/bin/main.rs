@@ -74,7 +74,8 @@ macro_rules! mk_static {
 )]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    // C3 max is 160 MHz; 80 MHz cuts idle heat a lot (TLS scrape still OK).
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz);
     let peripherals = esp_hal::init(config);
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 56 * 1024);
@@ -247,10 +248,14 @@ async fn wait_for_connection(stack: Stack<'_>) {
 #[embassy_executor::task]
 async fn connection(mut controller: WifiController<'static>) {
     println!("wifi connection task");
+    // 0.25 dBm units: 68 ⇒ 17 dBm (default max is 84 ⇒ 20 dBm).
+    const TX_POWER: i8 = 68;
     loop {
         if controller.is_connected() {
             let _ = controller.wait_for_disconnect_async().await;
             println!("wifi disconnected");
+            // Full radio while reconnecting.
+            let _ = controller.set_power_saving(esp_radio::wifi::PowerSaveMode::None);
             Timer::after(Duration::from_secs(3)).await;
         }
 
@@ -267,7 +272,22 @@ async fn connection(mut controller: WifiController<'static>) {
 
         println!("wifi connecting…");
         match controller.connect_async().await {
-            Ok(_) => println!("wifi connected"),
+            Ok(_) => {
+                println!("wifi connected");
+                // After assoc: lower TX a bit + modem sleep between beacons (heat).
+                if let Err(e) = controller.set_max_tx_power(TX_POWER) {
+                    println!("wifi set_max_tx_power: {e:?}");
+                } else {
+                    println!("wifi tx power {TX_POWER}/0.25dBm (~17dBm)");
+                }
+                if let Err(e) =
+                    controller.set_power_saving(esp_radio::wifi::PowerSaveMode::Minimum)
+                {
+                    println!("wifi power_save: {e:?}");
+                } else {
+                    println!("wifi power_save Minimum");
+                }
+            }
             Err(e) => {
                 println!("wifi connect failed: {e:?}");
                 Timer::after(Duration::from_secs(5)).await;
