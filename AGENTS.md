@@ -52,7 +52,7 @@ assets/           SUIT TTF copies (too large for firmware; unused by device buil
 4. **Large HTTPS bodies**: node-exporter `/metrics` can be ~100–200 KiB. Never buffer the whole body; stream into `MetricsParser` (line accumulator ≤256 B).
 5. **CPU % (node-exporter)**: Sum all `node_cpu_seconds_total` and idle-mode samples; usage = `100 * (1 - Δidle/Δtotal)` between scrapes. First scrape → CPU `None` / UI `n/a`.
 6. **mon64 export**: If `mon64_node_cpu_percent` / `mon64_node_mem_used_percent` appear, prefer those (no delta).
-7. **TLS**: Certificate verification off (`UnsecureProvider`). TLS record buffers are `static mut` reused only from the main task (no concurrent scrapes).
+7. **TLS**: Certificate verification off (`UnsecureProvider`). Call `TlsConfig::enable_rsa_signatures()` so RSA server certs (e.g. Let's Encrypt) negotiate; default ClientHello is ECDSA/Ed25519-only and causes `HandshakeFailure`. TLS RX buffer must be **16_640** (max ciphertext record). Prefer ALPN `http/1.1` and HTTP/1.0 requests (avoids chunked bodies). Use `FlushPolicy::Relaxed` (Strict ACK-wait breaks full-duplex HTTPS on smoltcp). Disable TCP idle timeout (embassy-net maps it to `Io(ConnectionReset)`). Abort+flush sockets after each scrape; DNS is retried/cached. TLS/TCP static buffers are reused only from the main task (no concurrent scrapes).
 8. **Env typo**: Primary names are `GUAGE1_PROM_METRIC` / `GUAGE2_PROM_METRIC` (as specified by the project owner). `GAUGE*` and `PASSWORD` are accepted aliases in `build.rs`.
 9. **Heap**: `esp_alloc` reclaimed region ~56 KiB — do not inflate casually; link may fail with `dram2_uninit` overflow.
 10. **Fonts**: Device uses `FONT_6X10` / `FONT_10X20`, not SUIT TTF (flash/RAM). Glow text from `_ref` is omitted.

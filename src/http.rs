@@ -1,18 +1,24 @@
 //! Minimal HTTPS GET with streaming body (embassy-net + embedded-tls).
 
+use crate::metrics::{CpuHistory, GaugeStats, MetricsParser};
 use embassy_net::{
     dns::DnsQueryType,
     tcp::TcpSocket,
     IpAddress, Stack,
 };
+use embassy_time::{Duration, Timer};
 use embedded_io_async::{Read, Write};
 use embedded_tls::{
-    Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
+    Aes128GcmSha256, FlushPolicy, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
 };
-use crate::metrics::{CpuHistory, GaugeStats, MetricsParser};
 use esp_println::println;
 use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
+
+/// Max TLS ciphertext record is 16_640 bytes (embedded-tls requirement).
+const TLS_RECORD_MAX: usize = 16_640;
+const TCP_BUF: usize = 4096;
+const ALPN_HTTP11: &[&[u8]] = &[b"http/1.1"];
 
 /// Fetch Prometheus text from `url` and parse CPU/MEM stats.
 pub async fn fetch_prometheus(
@@ -27,10 +33,7 @@ pub async fn fetch_prometheus(
 
     let Some((host, path, use_tls)) = parse_url(url) else {
         println!("bad url: {url}");
-        return GaugeStats {
-            reachable: false,
-            ..Default::default()
-        };
+        return unreachable_stats();
     };
 
     let port: u16 = if use_tls { 443 } else { 80 };
@@ -39,35 +42,41 @@ pub async fn fetch_prometheus(
         Some(ip) => ip,
         None => {
             println!("dns fail: {host}");
-            return GaugeStats {
-                reachable: false,
-                ..Default::default()
-            };
+            return unreachable_stats();
         }
     };
+    println!("fetch {host} -> {ip}");
 
-    let mut rx_buf = [0u8; 4096];
-    let mut tx_buf = [0u8; 4096];
-    let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
-    socket.set_timeout(Some(embassy_time::Duration::from_secs(15)));
+    // SAFETY: only awaited from the main task, never concurrently.
+    static mut TCP_RX: [u8; TCP_BUF] = [0; TCP_BUF];
+    static mut TCP_TX: [u8; TCP_BUF] = [0; TCP_BUF];
+    let tcp_rx = unsafe { &mut *core::ptr::addr_of_mut!(TCP_RX) };
+    let tcp_tx = unsafe { &mut *core::ptr::addr_of_mut!(TCP_TX) };
+
+    let mut socket = TcpSocket::new(stack, tcp_rx, tcp_tx);
+    // Idle timeout is reported as Io(ConnectionReset) by embassy-net — disable it.
+    socket.set_timeout(None);
+    socket.set_keep_alive(None);
 
     if let Err(e) = socket.connect((ip, port)).await {
         println!("tcp connect {host}:{port}: {e:?}");
-        return GaugeStats {
-            reachable: false,
-            ..Default::default()
-        };
+        return unreachable_stats();
     }
 
-    if use_tls {
-        // SAFETY: fetch_prometheus is only awaited from the main task, never concurrently.
-        static mut TLS_RX: [u8; 8192] = [0; 8192];
+    let stats = if use_tls {
+        static mut TLS_RX: [u8; TLS_RECORD_MAX] = [0; TLS_RECORD_MAX];
         static mut TLS_TX: [u8; 4096] = [0; 4096];
         let tls_rx = unsafe { &mut *core::ptr::addr_of_mut!(TLS_RX) };
         let tls_tx = unsafe { &mut *core::ptr::addr_of_mut!(TLS_TX) };
 
         let mut tls = TlsConnection::new(socket, tls_rx, tls_tx);
-        let config = TlsConfig::new().with_server_name(host);
+        // Don't block waiting for ACKs between records — needed for full-duplex HTTPS.
+        tls.set_flush_policy(FlushPolicy::Relaxed);
+
+        let config = TlsConfig::new()
+            .enable_rsa_signatures()
+            .with_server_name(host)
+            .with_alpn(ALPN_HTTP11);
         let rng = ChaCha8Rng::seed_from_u64(tls_seed);
         if let Err(e) = tls
             .open(TlsContext::new(
@@ -77,15 +86,47 @@ pub async fn fetch_prometheus(
             .await
         {
             println!("tls open: {e:?}");
-            return GaugeStats {
-                reachable: false,
-                ..Default::default()
-            };
+            abort_tls(tls).await;
+            return unreachable_stats();
         }
+        println!("tls ok {host}");
 
-        stream_http_get(&mut tls, host, path, history).await
+        let stats = stream_http_get(&mut tls, host, path, history).await;
+        abort_tls(tls).await;
+        // Brief pause so FIN/RST can leave before the next scrape reuses buffers.
+        Timer::after(Duration::from_millis(50)).await;
+        stats
     } else {
-        stream_http_get(&mut socket, host, path, history).await
+        let stats = stream_http_get(&mut socket, host, path, history).await;
+        socket.abort();
+        let _ = socket.flush().await;
+        Timer::after(Duration::from_millis(50)).await;
+        stats
+    };
+
+    stats
+}
+
+async fn abort_tls(
+    tls: TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256>,
+) {
+    match tls.close().await {
+        Ok(mut socket) => {
+            socket.abort();
+            let _ = socket.flush().await;
+        }
+        Err((mut socket, e)) => {
+            println!("tls close: {e:?}");
+            socket.abort();
+            let _ = socket.flush().await;
+        }
+    }
+}
+
+fn unreachable_stats() -> GaugeStats {
+    GaugeStats {
+        reachable: false,
+        ..Default::default()
     }
 }
 
@@ -98,31 +139,35 @@ async fn stream_http_get<S>(
 where
     S: Read + Write,
 {
+    // HTTP/1.0 avoids chunked encoding on many reverse proxies; body ends on close.
     let mut req: heapless::String<256> = heapless::String::new();
     let _ = req.push_str("GET ");
     let _ = req.push_str(path);
-    let _ = req.push_str(" HTTP/1.1\r\nHost: ");
+    let _ = req.push_str(" HTTP/1.0\r\nHost: ");
     let _ = req.push_str(host);
     let _ = req.push_str("\r\nUser-Agent: esp-dual-gauge\r\nConnection: close\r\n\r\n");
 
     if let Err(e) = stream.write_all(req.as_bytes()).await {
         println!("http write: {e:?}");
-        return GaugeStats {
-            reachable: false,
-            ..Default::default()
-        };
+        return unreachable_stats();
     }
-    let _ = stream.flush().await;
+    if let Err(e) = stream.flush().await {
+        println!("http flush: {e:?}");
+        return unreachable_stats();
+    }
+    println!("http req sent {host}");
 
     let mut buf = [0u8; 512];
     let mut header = heapless::Vec::<u8, 1024>::new();
     let mut header_done = false;
+    let mut got = 0usize;
     let mut parser = MetricsParser::new();
 
     loop {
         match stream.read(&mut buf).await {
             Ok(0) => break,
             Ok(n) => {
+                got += n;
                 let chunk = &buf[..n];
                 if !header_done {
                     for &b in chunk {
@@ -133,10 +178,7 @@ where
                         let (head, body) = header.split_at(pos);
                         if !parse_status_ok(head) {
                             println!("http bad status");
-                            return GaugeStats {
-                                reachable: false,
-                                ..Default::default()
-                            };
+                            return unreachable_stats();
                         }
                         parser.push(body);
                     }
@@ -145,20 +187,18 @@ where
                 }
             }
             Err(e) => {
-                println!("http read: {e:?}");
+                println!("http read: {e:?} (got {got}B, hdr={header_done})");
                 break;
             }
         }
     }
 
     if !header_done {
-        println!("http truncated headers");
-        return GaugeStats {
-            reachable: false,
-            ..Default::default()
-        };
+        println!("http truncated headers ({got}B)");
+        return unreachable_stats();
     }
 
+    println!("http ok {host} ({got}B)");
     parser.finish(history)
 }
 
@@ -199,12 +239,50 @@ async fn resolve_host(stack: Stack<'_>, host: &str) -> Option<IpAddress> {
     if let Ok(v4) = host.parse::<core::net::Ipv4Addr>() {
         return Some(IpAddress::Ipv4(embassy_net::Ipv4Address::from(v4.octets())));
     }
-    match stack.dns_query(host, DnsQueryType::A).await {
-        Ok(addrs) if !addrs.is_empty() => Some(addrs[0]),
-        Ok(_) => None,
-        Err(e) => {
-            println!("dns_query: {e:?}");
-            None
+
+    // Cache last few resolutions — node1/node2 often share an A record, and DNS
+    // can fail after a messy TCP teardown.
+    struct Entry {
+        host: heapless::String<64>,
+        ip: IpAddress,
+    }
+    static mut CACHE: [Option<Entry>; 2] = [None, None];
+    // SAFETY: only called from the main task.
+    let cache = unsafe { &mut *core::ptr::addr_of_mut!(CACHE) };
+    for e in cache.iter() {
+        if let Some(e) = e {
+            if e.host.as_str() == host {
+                return Some(e.ip);
+            }
         }
     }
+
+    for attempt in 0..3u8 {
+        match stack.dns_query(host, DnsQueryType::A).await {
+            Ok(addrs) if !addrs.is_empty() => {
+                let ip = addrs[0];
+                let mut name = heapless::String::new();
+                let _ = name.push_str(host);
+                // Insert / replace in a free or oldest slot.
+                if let Some(slot) = cache.iter_mut().find(|s| s.is_none()) {
+                    *slot = Some(Entry { host: name, ip });
+                } else {
+                    cache[0] = Some(Entry { host: name, ip });
+                }
+                return Some(ip);
+            }
+            Ok(_) => println!("dns empty: {host} (try {attempt})"),
+            Err(e) => println!("dns_query: {e:?} (try {attempt})"),
+        }
+        Timer::after(Duration::from_millis(200)).await;
+    }
+
+    // Last resort: reuse any cached IP (same LB for sibling hostnames).
+    for e in cache.iter() {
+        if let Some(e) = e {
+            println!("dns fallback cache {} -> {}", e.host, e.ip);
+            return Some(e.ip);
+        }
+    }
+    None
 }
