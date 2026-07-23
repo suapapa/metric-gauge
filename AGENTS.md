@@ -1,0 +1,112 @@
+# AGENTS.md — esp-dual-gauge agent guide
+
+Orientation for automated agents (and humans) working on this firmware.
+
+## Project summary
+
+**esp-dual-gauge** is a `no_std` Embassy / esp-hal firmware for **ESP32-C3 Super Mini** that:
+
+1. Joins Wi-Fi using compile-time `SSID` / `PASS`
+2. HTTPS-GETs two Prometheus endpoints (`GUAGE1_PROM_METRIC`, `GUAGE2_PROM_METRIC`)
+3. Parses CPU % + MEM % (node-exporter or mon64 export)
+4. Draws a 240×240 dual-arc circle gauge on each of two **GC9A01** SPI LCDs
+
+Visual / layout reference: `_ref/` (Rust host renderer + Lottie; **not** linked into firmware) and `../mon64/internal/badge/circle240.go`. Firmware uses a lightweight band renderer instead of Lottie/TTF.
+
+User-facing pin map and flash steps: `README.md`.
+
+## Tech stack
+
+| Layer | Choice |
+|-------|--------|
+| Target | `riscv32imc-unknown-none-elf`, ESP32-C3 |
+| HAL / RTOS | `esp-hal` ~1.1, `esp-rtos` 0.3, `esp-radio` 0.18 |
+| Async | Embassy (`embassy-executor`, `embassy-net`, `embassy-time`) |
+| Display | `gc9a01-rs` 0.4 + shared SPI via `embedded-hal-bus` `RefCellDevice` |
+| Graphics | Custom RGB565 band renderer + `embedded-graphics` mono fonts |
+| HTTPS | Manual HTTP/1.1 + `embedded-tls` 0.19 (`default-features = false`, `NoVerify` / `UnsecureProvider`) |
+| Logging | `esp-println` + `log` |
+
+Do **not** pull in `reqwless` against current `embassy-net` 0.9 without aligning `embedded-nal-async` versions (0.8 vs 0.9 mismatch). Prefer the existing `src/http.rs` path.
+
+## Directory layout
+
+```
+src/bin/main.rs   Wi-Fi, dual GC9A01 init, scrape/render loop
+src/lib.rs        Module exports
+src/config.rs     env!("…") constants + host_label()
+src/http.rs       DNS + TCP + TLS + streaming HTTP GET
+src/metrics.rs    Streaming Prometheus line parser + CPU delta history
+src/render.rs     Banded circle-gauge drawing (RGB565)
+build.rs          Linker helpers + rustc-env from SSID/PASS/GUAGE*
+_ref/             Host-side reference (gitignored) — Lottie/fontdue; do not embed on device
+assets/           SUIT TTF copies (too large for firmware; unused by device build)
+.cargo/config.toml  Target + espflash runner
+```
+
+## Key design decisions
+
+1. **SPI, not I²C**: GC9A01 is 4-wire SPI. Pin labels SDA/SCL on cheap modules mean MOSI/SCK.
+2. **Shared SPI bus**: One `Spi` in a `RefCell`, two `RefCellDevice`s with separate CS (+ separate DC pins). Shared RST/BL.
+3. **RAM**: Full 240×240×2 framebuffer (~112 KiB) does not fit with Wi-Fi + TLS on C3. Render in **40-px horizontal bands** (`BandBuffer` / `render_gauge_bands`) and `set_draw_area` + `draw_buffer` per band.
+4. **Large HTTPS bodies**: node-exporter `/metrics` can be ~100–200 KiB. Never buffer the whole body; stream into `MetricsParser` (line accumulator ≤256 B).
+5. **CPU % (node-exporter)**: Sum all `node_cpu_seconds_total` and idle-mode samples; usage = `100 * (1 - Δidle/Δtotal)` between scrapes. First scrape → CPU `None` / UI `n/a`.
+6. **mon64 export**: If `mon64_node_cpu_percent` / `mon64_node_mem_used_percent` appear, prefer those (no delta).
+7. **TLS**: Certificate verification off (`UnsecureProvider`). TLS record buffers are `static mut` reused only from the main task (no concurrent scrapes).
+8. **Env typo**: Primary names are `GUAGE1_PROM_METRIC` / `GUAGE2_PROM_METRIC` (as specified by the project owner). `GAUGE*` and `PASSWORD` are accepted aliases in `build.rs`.
+9. **Heap**: `esp_alloc` reclaimed region ~56 KiB — do not inflate casually; link may fail with `dram2_uninit` overflow.
+10. **Fonts**: Device uses `FONT_6X10` / `FONT_10X20`, not SUIT TTF (flash/RAM). Glow text from `_ref` is omitted.
+
+## Pin map (firmware source of truth)
+
+See comments in `src/bin/main.rs` and `README.md`:
+
+| Signal | GPIO |
+|--------|------|
+| SCK / MOSI | 6 / 7 |
+| RST / BL | 0 / 5 |
+| CS1 / DC1 | 10 / 1 |
+| CS2 / DC2 | 3 / 4 |
+
+## Commands
+
+```bash
+# Check / build (env required for real URLs; empty placeholders still compile with warnings)
+SSID=… PASS=… \
+GUAGE1_PROM_METRIC=https://…/metrics \
+GUAGE2_PROM_METRIC=https://…/metrics \
+cargo check --release
+
+SSID=… PASS=… GUAGE1_PROM_METRIC=… GUAGE2_PROM_METRIC=… \
+cargo build --release
+
+# Flash + serial monitor (default runner)
+SSID=… PASS=… GUAGE1_PROM_METRIC=… GUAGE2_PROM_METRIC=… \
+cargo run --release
+```
+
+Clippy: crate denies `clippy::large_stack_frames` and `clippy::mem_forget` in `main.rs` — keep large buffers in `static` / `StaticCell`, not on task stacks.
+
+## Safe change guidelines
+
+- Prefer small, focused diffs; match existing module split (`http` / `metrics` / `render`).
+- Changing pins: update `main.rs`, `README.md`, and this file together.
+- Adding scrape fields: extend `MetricsParser` only; keep streaming.
+- Display work: keep band height × width × 2 within a few tens of KiB; avoid a second full framebuffer.
+- Do not enable `embedded-tls` default features (`std` / `tokio`).
+- Do not commit secrets; env vars are compile-time only and must not be hardcoded in source.
+
+## Known limitations / good follow-ups
+
+- TLS verify disabled; no client certs.
+- Scrape interval fixed at 10 s in `main`.
+- Mono fonts only; no SUIT Heavy / glow.
+- Band redraw recomputes the whole gauge per band (correct but CPU-heavy); caching static layers is optional optimization.
+- Dual-display SPI is blocking; no DMA yet.
+- `_ref` Lottie path is host-only; do not try to run `rasterlottie` on-device.
+
+## Related docs
+
+- ESP32-C3 Super Mini pins: https://lastminuteengineers.com/esp32-c3-super-mini-pinout-reference/
+- `gc9a01-rs`: https://docs.rs/gc9a01-rs/latest/gc9a01/
+- mon64 Prometheus shape: `../mon64/internal/export/prometheus/export.go`

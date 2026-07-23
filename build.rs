@@ -2,6 +2,35 @@ fn main() {
     linker_be_nice();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+
+    // Compile-time configuration (passed via ENV when building/flashing).
+    // Example:
+    //   SSID=myssid PASS=secret \
+    //   GUAGE1_PROM_METRIC=https://node1.homin.dev/metrics \
+    //   GUAGE2_PROM_METRIC=https://node2.homin.dev/metrics \
+    //   cargo run --release
+    emit_env("SSID", None);
+    emit_env("PASS", Some("PASSWORD")); // PASSWORD accepted as alias
+    emit_env("GUAGE1_PROM_METRIC", Some("GAUGE1_PROM_METRIC"));
+    emit_env("GUAGE2_PROM_METRIC", Some("GAUGE2_PROM_METRIC"));
+}
+
+fn emit_env(primary: &str, alias: Option<&str>) {
+    println!("cargo:rerun-if-env-changed={primary}");
+    if let Some(alias) = alias {
+        println!("cargo:rerun-if-env-changed={alias}");
+    }
+
+    let value = std::env::var(primary)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| alias.and_then(|a| std::env::var(a).ok().filter(|v| !v.is_empty())))
+        .unwrap_or_default();
+
+    if value.is_empty() {
+        eprintln!("cargo:warning={primary} is unset; firmware will use an empty placeholder");
+    }
+    println!("cargo:rustc-env={primary}={value}");
 }
 
 fn linker_be_nice() {

@@ -22,6 +22,7 @@ esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c3"] }
 
 embassy-net = { version = "0.9.1", features = [
   "dhcpv4",
+  "dns",
   "medium-ethernet",
   "tcp",
   "udp",
@@ -29,9 +30,9 @@ embassy-net = { version = "0.9.1", features = [
 embedded-io = "0.7.1"
 embedded-io-async = "0.7.0"
 esp-alloc = "0.10.0"
-# for more networking protocol support see https://crates.io/crates/edge-net
 embassy-executor = { version = "0.10.0", features = [] }
 embassy-time = "0.5.0"
+embassy-sync = "0.7.0"
 esp-radio = { version = "0.18.0", features = [
   "esp-alloc",
   "esp32c3",
@@ -52,8 +53,26 @@ smoltcp = { version = "0.13.0", default-features = false, features = [
 ] }
 
 critical-section = "1.2.0"
-static_cell      = "2.1.1"
+static_cell = "2.1.1"
 
+# Display
+gc9a01-rs = "0.4.2"
+display-interface = "0.5"
+embedded-hal = "1.0"
+embedded-hal-bus = "0.1"
+embedded-graphics = "0.8"
+embedded-graphics-core = "0.4"
+
+# HTTP / TLS
+embedded-tls = { version = "0.19", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+
+# Logging + math
+esp-println = { version = "0.16", features = ["esp32c3", "log-04"] }
+log = "0.4"
+libm = "0.2"
+heapless = "0.8"
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.dev]

@@ -7,51 +7,273 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+use core::cell::RefCell;
+
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
-use esp_hal::clock::CpuClock;
-use esp_hal::timer::timg::TimerGroup;
+use embassy_net::{DhcpConfig, Runner, Stack, StackResources};
+use embassy_time::{Delay, Duration, Timer};
+use embedded_hal_bus::spi::RefCellDevice;
+use esp_dual_gauge::{
+    config::{self, GAUGE1_URL, GAUGE2_URL, PASS, SSID},
+    http::fetch_prometheus,
+    metrics::CpuHistory,
+    render::{BandBuffer, render_gauge_bands},
+};
+use esp_hal::{
+    clock::CpuClock,
+    delay::Delay as BlockingDelay,
+    gpio::{Level, Output, OutputConfig},
+    interrupt::software::SoftwareInterruptControl,
+    rng::Rng,
+    spi::{
+        Mode,
+        master::{Config as SpiConfig, Spi},
+    },
+    time::Rate,
+    timer::timg::TimerGroup,
+};
+use esp_println::println;
+use esp_radio::wifi::{Config as WifiConfig, WifiController, sta::StationConfig};
+use gc9a01::{
+    Gc9a01, SPIDisplayInterface,
+    display::DisplayResolution240x240,
+    mode::DisplayConfiguration,
+    rotation::DisplayRotation,
+};
+use static_cell::StaticCell;
 
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    println!("PANIC: {info}");
     loop {}
 }
 
 extern crate alloc;
 
-// This creates a default app-descriptor required by the esp-idf bootloader.
-// For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
+
+macro_rules! mk_static {
+    ($t:ty, $val:expr) => {{
+        static STATIC_CELL: StaticCell<$t> = StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
+}
+
+// ESP32-C3 Super Mini + dual GC9A01 (4-wire SPI).
+// Round modules often label MOSI/SCK as SDA/SCL — still SPI, not I²C.
+//
+// Shared: SCK=GPIO6, MOSI=GPIO7, RST=GPIO0, BL=GPIO5
+// Gauge1: CS=GPIO10, DC=GPIO1
+// Gauge2: CS=GPIO3,  DC=GPIO4
 
 #[allow(
     clippy::large_stack_frames,
-    reason = "it's not unusual to allocate larger buffers etc. in main"
+    reason = "display state and scrape loop live in main"
 )]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    // generator version: 1.3.0
-    // generator parameters: --chip esp32c3 -o unstable-hal -o wifi -o alloc -o embassy -o stack-smashing-protection
-
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 66320);
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 56 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    let sw_interrupt =
-        esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    let sw_interrupt = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
-    let (mut _wifi_controller, _interfaces) =
-        esp_radio::wifi::new(peripherals.WIFI, Default::default())
-            .expect("Failed to initialize Wi-Fi controller");
+    esp_println::logger::init_logger_from_env();
+    println!("esp-dual-gauge boot");
+    println!("SSID len={}", SSID.len());
+    println!("gauge1={GAUGE1_URL}");
+    println!("gauge2={GAUGE2_URL}");
 
-    // TODO: Spawn some tasks
-    let _ = spawner;
+    // --- Displays ---
+    let mut rst = Output::new(peripherals.GPIO0, Level::High, OutputConfig::default());
+    let mut bl = Output::new(peripherals.GPIO5, Level::High, OutputConfig::default());
+    let _ = bl.set_high();
+
+    let spi = Spi::new(
+        peripherals.SPI2,
+        SpiConfig::default()
+            .with_frequency(Rate::from_mhz(40))
+            .with_mode(Mode::_0),
+    )
+    .expect("SPI2 init")
+    .with_sck(peripherals.GPIO6)
+    .with_mosi(peripherals.GPIO7);
+
+    let spi_bus = RefCell::new(spi);
+    let spi_dev1 = RefCellDevice::new(
+        &spi_bus,
+        Output::new(peripherals.GPIO10, Level::High, OutputConfig::default()),
+        Delay,
+    );
+    let spi_dev2 = RefCellDevice::new(
+        &spi_bus,
+        Output::new(peripherals.GPIO3, Level::High, OutputConfig::default()),
+        Delay,
+    );
+
+    let iface1 = SPIDisplayInterface::new(
+        spi_dev1,
+        Output::new(peripherals.GPIO1, Level::Low, OutputConfig::default()),
+    );
+    let iface2 = SPIDisplayInterface::new(
+        spi_dev2,
+        Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default()),
+    );
+
+    let mut display1 = Gc9a01::new(
+        iface1,
+        DisplayResolution240x240,
+        DisplayRotation::Rotate0,
+    );
+    let mut display2 = Gc9a01::new(
+        iface2,
+        DisplayResolution240x240,
+        DisplayRotation::Rotate0,
+    );
+
+    let mut blocking_delay = BlockingDelay::new();
+    let _ = display1.reset(&mut rst, &mut blocking_delay);
+    let _ = display1.init(&mut blocking_delay);
+    let _ = display2.init(&mut blocking_delay);
+    println!("displays ready");
+
+    static BAND: StaticCell<BandBuffer> = StaticCell::new();
+    let band = BAND.init_with(BandBuffer::new);
+    paint_gauge(&mut display1, band, Some(0.0), Some(0.0), "boot", true);
+    paint_gauge(&mut display2, band, Some(0.0), Some(0.0), "boot", true);
+
+    // --- Wi-Fi ---
+    let rng = Rng::new();
+    let (wifi_controller, interfaces) =
+        esp_radio::wifi::new(peripherals.WIFI, Default::default()).expect("Wi-Fi init");
+
+    let wifi_interface = interfaces.station;
+    let net_seed = u64::from(rng.random()) | (u64::from(rng.random()) << 32);
+    let tls_seed = u64::from(rng.random()) | (u64::from(rng.random()) << 32);
+
+    let (stack, runner) = embassy_net::new(
+        wifi_interface,
+        embassy_net::Config::dhcpv4(DhcpConfig::default()),
+        mk_static!(StackResources<4>, StackResources::<4>::new()),
+        net_seed,
+    );
+
+    spawner.spawn(connection(wifi_controller).unwrap());
+    spawner.spawn(net_task(runner).unwrap());
+
+    wait_for_connection(stack).await;
+    println!("network up");
+
+    let host1 = config::host_label(GAUGE1_URL);
+    let host2 = config::host_label(GAUGE2_URL);
+    let mut hist1 = CpuHistory::default();
+    let mut hist2 = CpuHistory::default();
 
     loop {
-        Timer::after(Duration::from_secs(1)).await;
-    }
+        let stats1 = fetch_prometheus(stack, tls_seed, GAUGE1_URL, &mut hist1).await;
+        let stats2 = fetch_prometheus(stack, tls_seed, GAUGE2_URL, &mut hist2).await;
 
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
+        paint_gauge(
+            &mut display1,
+            band,
+            stats1.cpu_percent,
+            stats1.mem_percent,
+            host1,
+            stats1.reachable,
+        );
+        paint_gauge(
+            &mut display2,
+            band,
+            stats2.cpu_percent,
+            stats2.mem_percent,
+            host2,
+            stats2.reachable,
+        );
+
+        println!(
+            "g1 cpu={:?} mem={:?} | g2 cpu={:?} mem={:?}",
+            stats1.cpu_percent, stats1.mem_percent, stats2.cpu_percent, stats2.mem_percent
+        );
+
+        Timer::after(Duration::from_secs(10)).await;
+    }
+}
+
+fn paint_gauge<I>(
+    display: &mut Gc9a01<I, DisplayResolution240x240, gc9a01::mode::BasicMode>,
+    band: &mut BandBuffer,
+    cpu: Option<f32>,
+    mem: Option<f32>,
+    hostname: &str,
+    reachable: bool,
+) where
+    I: display_interface::WriteOnlyDataCommand,
+{
+    render_gauge_bands(band, cpu, mem, hostname, reachable, |b| {
+        let y0 = b.y0 as u16;
+        let y1 = (b.y0 + b.height as i32 - 1) as u16;
+        let _ = display.set_draw_area((0, y0), (239, y1));
+        let _ = display.draw_buffer(b.row_slice());
+    });
+}
+
+async fn wait_for_connection(stack: Stack<'_>) {
+    println!("waiting for link");
+    loop {
+        if stack.is_link_up() {
+            break;
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
+    println!("waiting for DHCP");
+    loop {
+        if let Some(config) = stack.config_v4() {
+            println!("IP {}", config.address);
+            break;
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
+}
+
+#[allow(clippy::large_stack_frames)]
+#[embassy_executor::task]
+async fn connection(mut controller: WifiController<'static>) {
+    println!("wifi connection task");
+    loop {
+        if controller.is_connected() {
+            let _ = controller.wait_for_disconnect_async().await;
+            println!("wifi disconnected");
+            Timer::after(Duration::from_secs(3)).await;
+        }
+
+        let station_config = WifiConfig::Station(
+            StationConfig::default()
+                .with_ssid(SSID)
+                .with_password(PASS.into()),
+        );
+        if let Err(e) = controller.set_config(&station_config) {
+            println!("wifi set_config: {e:?}");
+            Timer::after(Duration::from_secs(3)).await;
+            continue;
+        }
+
+        println!("wifi connecting…");
+        match controller.connect_async().await {
+            Ok(_) => println!("wifi connected"),
+            Err(e) => {
+                println!("wifi connect failed: {e:?}");
+                Timer::after(Duration::from_secs(5)).await;
+            }
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn net_task(mut runner: Runner<'static, esp_radio::wifi::Interface<'static>>) -> ! {
+    runner.run().await
 }
