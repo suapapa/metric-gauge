@@ -3,7 +3,7 @@
 //! Renders in horizontal bands to keep RAM small on ESP32-C3.
 
 use embedded_graphics::{
-    mono_font::{MonoTextStyle, ascii::FONT_10X20, ascii::FONT_6X10},
+    mono_font::{MonoTextStyle, ascii::FONT_10X20},
     pixelcolor::Rgb565,
     prelude::*,
     text::{Baseline, Text},
@@ -221,19 +221,65 @@ fn write_int(s: &mut heapless::String<8>, mut n: i32) -> Result<(), ()> {
     Ok(())
 }
 
+struct ScaledDrawTarget<'a, T> {
+    parent: &'a mut T,
+    scale: i32,
+    offset: Point,
+}
+
+impl<'a, T> OriginDimensions for ScaledDrawTarget<'a, T>
+where
+    T: OriginDimensions,
+{
+    fn size(&self) -> Size {
+        self.parent.size()
+    }
+}
+
+impl<'a, T> DrawTarget for ScaledDrawTarget<'a, T>
+where
+    T: DrawTarget<Color = Rgb565, Error = core::convert::Infallible> + OriginDimensions,
+{
+    type Color = Rgb565;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(coord, color) in pixels {
+            let x_base = coord.x * self.scale + self.offset.x;
+            let y_base = coord.y * self.scale + self.offset.y;
+
+            for dy in 0..self.scale {
+                for dx in 0..self.scale {
+                    let p = Pixel(Point::new(x_base + dx, y_base + dy), color);
+                    let _ = self.parent.draw_iter(core::iter::once(p));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 fn draw_label(fb: &mut BandBuffer, text: &str, col: Rgba, cx: i32, cy: i32, big: bool) {
     let color = Rgb565::new(col.r >> 3, col.g >> 2, col.b >> 3);
     if big {
         let style = MonoTextStyle::new(&FONT_10X20, color);
+        let width = text.len() as i32 * 20;
+        let x = cx - width / 2;
+        let y = cy - 20;
+        let mut target = ScaledDrawTarget {
+            parent: fb,
+            scale: 2,
+            offset: Point::new(x, y),
+        };
+        let _ = Text::with_baseline(text, Point::zero(), style, Baseline::Top).draw(&mut target);
+    } else {
+        let style = MonoTextStyle::new(&FONT_10X20, color);
         let width = text.len() as i32 * 10;
         let x = cx - width / 2;
         let y = cy - 10;
-        let _ = Text::with_baseline(text, Point::new(x, y), style, Baseline::Top).draw(fb);
-    } else {
-        let style = MonoTextStyle::new(&FONT_6X10, color);
-        let width = text.len() as i32 * 6;
-        let x = cx - width / 2;
-        let y = cy - 5;
         let _ = Text::with_baseline(text, Point::new(x, y), style, Baseline::Top).draw(fb);
     }
 }

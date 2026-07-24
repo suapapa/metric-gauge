@@ -221,8 +221,9 @@ fn paint_gauge<I>(
     render_gauge_bands(band, cpu, mem, hostname, reachable, |b| {
         let y0 = b.y0 as u16;
         let y1 = (b.y0 + b.height as i32 - 1) as u16;
-        let _ = display.set_draw_area((0, y0), (239, y1));
-        let _ = display.draw_buffer(b.row_slice());
+        // MemoryWrite (0x2C) must precede pixels; draw_buffer skips it.
+        let mut colors = b.row_slice().iter().copied();
+        let _ = display.set_pixels((0, y0), (239, y1), &mut colors);
     });
 }
 
