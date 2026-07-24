@@ -86,7 +86,7 @@ async fn main(spawner: Spawner) -> ! {
 
     esp_println::logger::init_logger_from_env();
     println!("esp-dual-gauge boot");
-    println!("SSID len={}", SSID.len());
+    println!("SSID len={} PASS len={}", SSID.len(), PASS.len());
     println!("gauge1={GAUGE1_URL}");
     println!("gauge2={GAUGE2_URL}");
 
@@ -248,8 +248,10 @@ async fn wait_for_connection(stack: Stack<'_>) {
 #[embassy_executor::task]
 async fn connection(mut controller: WifiController<'static>) {
     println!("wifi connection task");
-    // 0.25 dBm units: 68 ⇒ 17 dBm (default max is 84 ⇒ 20 dBm).
-    const TX_POWER: i8 = 68;
+    // ESP32-C3 Super Mini: default ~20 dBm often yields AuthenticationExpired
+    // during WPA (poor onboard antenna match). 8.5 dBm is the usual fix.
+    // Unit is 0.25 dBm → 34 ≈ 8.5 dBm. Must be set after start, before connect.
+    const TX_POWER: i8 = 34;
     loop {
         if controller.is_connected() {
             let _ = controller.wait_for_disconnect_async().await;
@@ -270,16 +272,18 @@ async fn connection(mut controller: WifiController<'static>) {
             continue;
         }
 
+        // set_config starts the radio; TX must be lowered before auth.
+        let _ = controller.set_power_saving(esp_radio::wifi::PowerSaveMode::None);
+        if let Err(e) = controller.set_max_tx_power(TX_POWER) {
+            println!("wifi set_max_tx_power: {e:?}");
+        } else {
+            println!("wifi tx power {TX_POWER}/0.25dBm (~8.5dBm)");
+        }
+
         println!("wifi connecting…");
         match controller.connect_async().await {
             Ok(_) => {
                 println!("wifi connected");
-                // After assoc: lower TX a bit + modem sleep between beacons (heat).
-                if let Err(e) = controller.set_max_tx_power(TX_POWER) {
-                    println!("wifi set_max_tx_power: {e:?}");
-                } else {
-                    println!("wifi tx power {TX_POWER}/0.25dBm (~17dBm)");
-                }
                 if let Err(e) =
                     controller.set_power_saving(esp_radio::wifi::PowerSaveMode::Minimum)
                 {
