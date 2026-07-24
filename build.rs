@@ -1,4 +1,22 @@
 fn main() {
+    // Load .env if present
+    if let Ok(content) = std::fs::read_to_string(".env") {
+        println!("cargo:warning=Loading configuration from .env file");
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((key, val)) = line.split_once('=') {
+                let key = key.trim();
+                let val = val.trim().trim_matches('"').trim_matches('\'');
+                unsafe {
+                    std::env::set_var(key, val);
+                }
+            }
+        }
+    }
+
     linker_be_nice();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
@@ -13,6 +31,8 @@ fn main() {
     emit_env("PASS", Some("PASSWORD")); // PASSWORD accepted as alias
     emit_env("GUAGE1_PROM_METRIC", Some("GAUGE1_PROM_METRIC"));
     emit_env("GUAGE2_PROM_METRIC", Some("GAUGE2_PROM_METRIC"));
+    emit_env("GUAGE1_ROTATION", Some("GAUGE1_ROTATION"));
+    emit_env("GUAGE2_ROTATION", Some("GAUGE2_ROTATION"));
 }
 
 fn emit_env(primary: &str, alias: Option<&str>) {

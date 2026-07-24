@@ -38,7 +38,6 @@ use gc9a01::{
     Gc9a01, SPIDisplayInterface,
     display::DisplayResolution240x240,
     mode::DisplayConfiguration,
-    rotation::DisplayRotation,
 };
 use static_cell::StaticCell;
 
@@ -68,6 +67,51 @@ macro_rules! mk_static {
 // Gauge1: CS=GPIO10, DC=GPIO1
 // Gauge2: CS=GPIO3,  DC=GPIO4
 
+struct RotationInterface<DI> {
+    inner: DI,
+    madctl: u8,
+}
+
+impl<DI> RotationInterface<DI> {
+    const fn new(inner: DI, madctl: u8) -> Self {
+        Self { inner, madctl }
+    }
+}
+
+impl<DI: display_interface::WriteOnlyDataCommand> display_interface::WriteOnlyDataCommand
+    for RotationInterface<DI>
+{
+    fn send_commands(
+        &mut self,
+        cmd: display_interface::DataFormat<'_>,
+    ) -> Result<(), display_interface::DisplayError> {
+        if let display_interface::DataFormat::U8(slice) = cmd {
+            if !slice.is_empty() && slice[0] == 0x36 {
+                if slice.len() > 1 {
+                    let mut modified = [0u8; 16];
+                    let len = slice.len().min(16);
+                    modified[..len].copy_from_slice(&slice[..len]);
+                    modified[1] = self.madctl;
+                    return self
+                        .inner
+                        .send_commands(display_interface::DataFormat::U8(&modified[..len]));
+                }
+            }
+            self.inner
+                .send_commands(display_interface::DataFormat::U8(slice))
+        } else {
+            self.inner.send_commands(cmd)
+        }
+    }
+
+    fn send_data(
+        &mut self,
+        buf: display_interface::DataFormat<'_>,
+    ) -> Result<(), display_interface::DisplayError> {
+        self.inner.send_data(buf)
+    }
+}
+
 #[allow(
     clippy::large_stack_frames,
     reason = "display state and scrape loop live in main"
@@ -89,6 +133,8 @@ async fn main(spawner: Spawner) -> ! {
     println!("SSID len={} PASS len={}", SSID.len(), PASS.len());
     println!("gauge1={GAUGE1_URL}");
     println!("gauge2={GAUGE2_URL}");
+    println!("gauge1 rotation={:?}", config::GAUGE1_ROTATION);
+    println!("gauge2 rotation={:?}", config::GAUGE2_ROTATION);
 
     // --- Displays ---
     let mut rst = Output::new(peripherals.GPIO0, Level::High, OutputConfig::default());
@@ -117,24 +163,30 @@ async fn main(spawner: Spawner) -> ! {
         Delay,
     );
 
-    let iface1 = SPIDisplayInterface::new(
-        spi_dev1,
-        Output::new(peripherals.GPIO1, Level::Low, OutputConfig::default()),
+    let iface1 = RotationInterface::new(
+        SPIDisplayInterface::new(
+            spi_dev1,
+            Output::new(peripherals.GPIO1, Level::Low, OutputConfig::default()),
+        ),
+        config::GAUGE1_MADCTL,
     );
-    let iface2 = SPIDisplayInterface::new(
-        spi_dev2,
-        Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default()),
+    let iface2 = RotationInterface::new(
+        SPIDisplayInterface::new(
+            spi_dev2,
+            Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default()),
+        ),
+        config::GAUGE2_MADCTL,
     );
 
     let mut display1 = Gc9a01::new(
         iface1,
         DisplayResolution240x240,
-        DisplayRotation::Rotate0,
+        config::GAUGE1_ROTATION,
     );
     let mut display2 = Gc9a01::new(
         iface2,
         DisplayResolution240x240,
-        DisplayRotation::Rotate0,
+        config::GAUGE2_ROTATION,
     );
 
     let mut blocking_delay = BlockingDelay::new();

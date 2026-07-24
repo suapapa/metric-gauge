@@ -42,6 +42,8 @@ Compile-time env vars (required for a useful image):
 | `PASS` | `PASSWORD` | Wi-Fi password |
 | `GUAGE1_PROM_METRIC` | `GAUGE1_PROM_METRIC` | Prometheus URL for display 1 |
 | `GUAGE2_PROM_METRIC` | `GAUGE2_PROM_METRIC` | Prometheus URL for display 2 |
+| `GUAGE1_ROTATION` | `GAUGE1_ROTATION` | Rotation for display 1 (`0`, `90`, `180`, `270` or `RotateX`) |
+| `GUAGE2_ROTATION` | `GAUGE2_ROTATION` | Rotation for display 2 (`0`, `90`, `180`, `270` or `RotateX`) |
 
 ```bash
 SSID=myssid PASS=secret \
