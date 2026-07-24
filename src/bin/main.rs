@@ -35,9 +35,7 @@ use esp_hal::{
 use esp_println::println;
 use esp_radio::wifi::{Config as WifiConfig, WifiController, sta::StationConfig};
 use gc9a01::{
-    Gc9a01, SPIDisplayInterface,
-    display::DisplayResolution240x240,
-    mode::DisplayConfiguration,
+    Gc9a01, SPIDisplayInterface, display::DisplayResolution240x240, mode::DisplayConfiguration,
 };
 use static_cell::StaticCell;
 
@@ -127,7 +125,9 @@ impl<DI: display_interface::WriteOnlyDataCommand> display_interface::WriteOnlyDa
                         .inner
                         .send_data(display_interface::DataFormat::U8(&modified[..len]));
                 }
-                return self.inner.send_data(display_interface::DataFormat::U8(slice));
+                return self
+                    .inner
+                    .send_data(display_interface::DataFormat::U8(slice));
             }
         }
         self.inner.send_data(buf)
@@ -166,7 +166,7 @@ async fn main(spawner: Spawner) -> ! {
     let spi = Spi::new(
         peripherals.SPI2,
         SpiConfig::default()
-            .with_frequency(Rate::from_mhz(40))
+            .with_frequency(Rate::from_mhz(64)) //40
             .with_mode(Mode::_0),
     )
     .expect("SPI2 init")
@@ -200,16 +200,8 @@ async fn main(spawner: Spawner) -> ! {
         config::GAUGE2_MADCTL,
     );
 
-    let mut display1 = Gc9a01::new(
-        iface1,
-        DisplayResolution240x240,
-        config::GAUGE1_ROTATION,
-    );
-    let mut display2 = Gc9a01::new(
-        iface2,
-        DisplayResolution240x240,
-        config::GAUGE2_ROTATION,
-    );
+    let mut display1 = Gc9a01::new(iface1, DisplayResolution240x240, config::GAUGE1_ROTATION);
+    let mut display2 = Gc9a01::new(iface2, DisplayResolution240x240, config::GAUGE2_ROTATION);
 
     let mut blocking_delay = BlockingDelay::new();
     let _ = display1.reset(&mut rst, &mut blocking_delay);
@@ -359,13 +351,9 @@ async fn connection(mut controller: WifiController<'static>) {
         match controller.connect_async().await {
             Ok(_) => {
                 println!("wifi connected");
-                if let Err(e) =
-                    controller.set_power_saving(esp_radio::wifi::PowerSaveMode::Minimum)
-                {
-                    println!("wifi power_save: {e:?}");
-                } else {
-                    println!("wifi power_save Minimum");
-                }
+                // Keep modem awake: Minimum sleep regularly stalls TCP/TLS
+                // handshakes to remote HTTPS (hangs after "fetch host -> ip").
+                let _ = controller.set_power_saving(esp_radio::wifi::PowerSaveMode::None);
             }
             Err(e) => {
                 println!("wifi connect failed: {e:?}");

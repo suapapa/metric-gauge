@@ -6,7 +6,7 @@ use embassy_net::{
     tcp::TcpSocket,
     IpAddress, Stack,
 };
-use embassy_time::{Duration, Timer};
+use embassy_time::{with_timeout, Duration, Timer};
 use embedded_io_async::{Read, Write};
 use embedded_tls::{
     Aes128GcmSha256, FlushPolicy, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
@@ -55,13 +55,25 @@ pub async fn fetch_prometheus(
 
     let mut socket = TcpSocket::new(stack, tcp_rx, tcp_tx);
     // Idle timeout is reported as Io(ConnectionReset) by embassy-net — disable it.
+    // Overall connect/TLS/HTTP deadlines use with_timeout instead.
     socket.set_timeout(None);
     socket.set_keep_alive(None);
 
-    if let Err(e) = socket.connect((ip, port)).await {
-        println!("tcp connect {host}:{port}: {e:?}");
-        return unreachable_stats();
+    println!("tcp connecting {host}:{port}");
+    match with_timeout(Duration::from_secs(15), socket.connect((ip, port))).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            println!("tcp connect {host}:{port}: {e:?}");
+            return unreachable_stats();
+        }
+        Err(_) => {
+            println!("tcp connect timeout {host}:{port}");
+            socket.abort();
+            let _ = socket.flush().await;
+            return unreachable_stats();
+        }
     }
+    println!("tcp ok {host}:{port}");
 
     let stats = if use_tls {
         static mut TLS_RX: [u8; TLS_RECORD_MAX] = [0; TLS_RECORD_MAX];
@@ -78,26 +90,59 @@ pub async fn fetch_prometheus(
             .with_server_name(host)
             .with_alpn(ALPN_HTTP11);
         let rng = ChaCha8Rng::seed_from_u64(tls_seed);
-        if let Err(e) = tls
-            .open(TlsContext::new(
+        println!("tls opening {host}");
+        match with_timeout(
+            Duration::from_secs(20),
+            tls.open(TlsContext::new(
                 &config,
                 UnsecureProvider::new::<Aes128GcmSha256>(rng),
-            ))
-            .await
+            )),
+        )
+        .await
         {
-            println!("tls open: {e:?}");
-            abort_tls(tls).await;
-            return unreachable_stats();
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                println!("tls open: {e:?}");
+                abort_tls(tls).await;
+                return unreachable_stats();
+            }
+            Err(_) => {
+                println!("tls open timeout {host}");
+                abort_tls(tls).await;
+                return unreachable_stats();
+            }
         }
         println!("tls ok {host}");
 
-        let stats = stream_http_get(&mut tls, host, path, history).await;
+        let stats = match with_timeout(
+            Duration::from_secs(45),
+            stream_http_get(&mut tls, host, path, history),
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(_) => {
+                println!("http timeout {host}");
+                unreachable_stats()
+            }
+        };
         abort_tls(tls).await;
         // Brief pause so FIN/RST can leave before the next scrape reuses buffers.
         Timer::after(Duration::from_millis(50)).await;
         stats
     } else {
-        let stats = stream_http_get(&mut socket, host, path, history).await;
+        let stats = match with_timeout(
+            Duration::from_secs(45),
+            stream_http_get(&mut socket, host, path, history),
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(_) => {
+                println!("http timeout {host}");
+                unreachable_stats()
+            }
+        };
         socket.abort();
         let _ = socket.flush().await;
         Timer::after(Duration::from_millis(50)).await;
