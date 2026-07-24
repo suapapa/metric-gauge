@@ -70,11 +70,16 @@ macro_rules! mk_static {
 struct RotationInterface<DI> {
     inner: DI,
     madctl: u8,
+    intercept_madctl: bool,
 }
 
 impl<DI> RotationInterface<DI> {
     const fn new(inner: DI, madctl: u8) -> Self {
-        Self { inner, madctl }
+        Self {
+            inner,
+            madctl,
+            intercept_madctl: false,
+        }
     }
 }
 
@@ -95,6 +100,8 @@ impl<DI: display_interface::WriteOnlyDataCommand> display_interface::WriteOnlyDa
                     return self
                         .inner
                         .send_commands(display_interface::DataFormat::U8(&modified[..len]));
+                } else {
+                    self.intercept_madctl = true;
                 }
             }
             self.inner
@@ -108,6 +115,21 @@ impl<DI: display_interface::WriteOnlyDataCommand> display_interface::WriteOnlyDa
         &mut self,
         buf: display_interface::DataFormat<'_>,
     ) -> Result<(), display_interface::DisplayError> {
+        if self.intercept_madctl {
+            self.intercept_madctl = false;
+            if let display_interface::DataFormat::U8(slice) = buf {
+                if !slice.is_empty() {
+                    let mut modified = [0u8; 16];
+                    let len = slice.len().min(16);
+                    modified[..len].copy_from_slice(&slice[..len]);
+                    modified[0] = self.madctl;
+                    return self
+                        .inner
+                        .send_data(display_interface::DataFormat::U8(&modified[..len]));
+                }
+                return self.inner.send_data(display_interface::DataFormat::U8(slice));
+            }
+        }
         self.inner.send_data(buf)
     }
 }

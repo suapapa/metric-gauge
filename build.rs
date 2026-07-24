@@ -1,4 +1,7 @@
 fn main() {
+    println!("cargo:rerun-if-changed=.env");
+    println!("cargo:rerun-if-changed=.env.local");
+
     // Load .env if present
     if let Ok(content) = std::fs::read_to_string(".env") {
         println!("cargo:warning=Loading configuration from .env file");
