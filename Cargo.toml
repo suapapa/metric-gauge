@@ -3,6 +3,8 @@ edition      = "2024"
 name         = "metric-gauge"
 rust-version = "1.88"
 version      = "0.1.0"
+license      = "MIT"
+
 
 [[bin]]
 name = "metric-gauge"

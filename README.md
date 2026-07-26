@@ -77,4 +77,5 @@ espflash flash --monitor --chip esp32c3 \
 
 ## License
 
-Same as repository defaults unless otherwise noted.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
