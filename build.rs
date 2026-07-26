@@ -27,15 +27,19 @@ fn main() {
     // Compile-time configuration (passed via ENV when building/flashing).
     // Example:
     //   SSID=myssid PASS=secret \
-    //   GUAGE1_PROM_METRIC=https://node1.homin.dev/metrics \
-    //   GUAGE2_PROM_METRIC=https://node2.homin.dev/metrics \
+    //   GAUGE1_PROM_METRIC=https://node1.homin.dev/metrics \
+    //   GAUGE2_PROM_METRIC=https://node2.homin.dev/metrics \
+    //   GAUGE1_NAME=cpu \
+    //   GAUGE2_NAME=mem \
     //   cargo run --release
     emit_env("SSID", None);
     emit_env("PASS", Some("PASSWORD")); // PASSWORD accepted as alias
-    emit_env("GUAGE1_PROM_METRIC", Some("GAUGE1_PROM_METRIC"));
-    emit_env("GUAGE2_PROM_METRIC", Some("GAUGE2_PROM_METRIC"));
-    emit_env("GUAGE1_ROTATION", Some("GAUGE1_ROTATION"));
-    emit_env("GUAGE2_ROTATION", Some("GAUGE2_ROTATION"));
+    emit_env("GAUGE1_PROM_METRIC", None);
+    emit_env("GAUGE2_PROM_METRIC", None);
+    emit_env("GAUGE1_ROTATION", None);
+    emit_env("GAUGE2_ROTATION", None);
+    emit_env("GAUGE1_NAME", None);
+    emit_env("GAUGE2_NAME", None);
 }
 
 fn emit_env(primary: &str, alias: Option<&str>) {

@@ -40,10 +40,12 @@ Compile-time env vars (required for a useful image):
 |-----|--------|---------|
 | `SSID` | — | Wi-Fi SSID |
 | `PASS` | `PASSWORD` | Wi-Fi password |
-| `GUAGE1_PROM_METRIC` | `GAUGE1_PROM_METRIC` | Prometheus URL for display 1 |
-| `GUAGE2_PROM_METRIC` | `GUAGE2_PROM_METRIC` | Prometheus URL for display 2 |
-| `GUAGE1_ROTATION` | `GAUGE1_ROTATION` | Rotation for display 1 (`0`, `90`, `180`, `270` or `RotateX`) |
-| `GUAGE2_ROTATION` | `GAUGE2_ROTATION` | Rotation for display 2 (`0`, `90`, `180`, `270` or `RotateX`) |
+| `GAUGE1_PROM_METRIC` | — | Prometheus URL for display 1 |
+| `GAUGE2_PROM_METRIC` | — | Prometheus URL for display 2 |
+| `GAUGE1_ROTATION` | — | Rotation for display 1 (`0`, `90`, `180`, `270` or `RotateX`) |
+| `GAUGE2_ROTATION` | — | Rotation for display 2 (`0`, `90`, `180`, `270` or `RotateX`) |
+| `GAUGE1_NAME` | — | Name of the gauge 1 (drawn on the display 1) |
+| `GAUGE2_NAME` | — | Name of the gauge 2 (drawn on the display 2) |
 
 Copy `.env.sample` to `.env` and edit it to fit your configuration:
 
@@ -76,7 +78,7 @@ espflash flash --monitor --chip esp32c3 \
 - Scrapes every **10 s** over HTTPS (TLS cert verification disabled).
 - Supports **node-exporter** (`node_cpu_seconds_total`, `node_memory_MemTotal_bytes` / `MemAvailable_bytes`) and **mon64** gauges (`mon64_node_cpu_percent`, `mon64_node_mem_used_percent`, …).
 - Node-exporter CPU needs two samples: first scrape shows `n/a` for CPU, then deltas work.
-- Hostname label on the gauge is the first DNS label of the URL host (e.g. `node1` from `https://node1.homin.dev/metrics`).
+- Hostname label on the gauge is configured via `GAUGE1_NAME` and `GAUGE2_NAME` (e.g. `node1`, `node2`).
 
 ## License
 

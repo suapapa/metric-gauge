@@ -5,20 +5,25 @@ use gc9a01::rotation::DisplayRotation;
 pub const SSID: &str = env!("SSID");
 pub const PASS: &str = env!("PASS");
 
-/// Prometheus scrape URL for display 1 (typo `GUAGE` kept for ENV compatibility).
-pub const GAUGE1_URL: &str = env!("GUAGE1_PROM_METRIC");
+/// Prometheus scrape URL for display 1.
+pub const GAUGE1_URL: &str = env!("GAUGE1_PROM_METRIC");
 /// Prometheus scrape URL for display 2.
-pub const GAUGE2_URL: &str = env!("GUAGE2_PROM_METRIC");
+pub const GAUGE2_URL: &str = env!("GAUGE2_PROM_METRIC");
 
 /// Display 1 rotation parsed at compile-time.
-pub const GAUGE1_ROTATION: DisplayRotation = parse_rotation_config(env!("GUAGE1_ROTATION")).0;
+pub const GAUGE1_ROTATION: DisplayRotation = parse_rotation_config(env!("GAUGE1_ROTATION")).0;
 /// Display 1 MADCTL register value parsed at compile-time.
-pub const GAUGE1_MADCTL: u8 = parse_rotation_config(env!("GUAGE1_ROTATION")).1;
+pub const GAUGE1_MADCTL: u8 = parse_rotation_config(env!("GAUGE1_ROTATION")).1;
 
 /// Display 2 rotation parsed at compile-time.
-pub const GAUGE2_ROTATION: DisplayRotation = parse_rotation_config(env!("GUAGE2_ROTATION")).0;
+pub const GAUGE2_ROTATION: DisplayRotation = parse_rotation_config(env!("GAUGE2_ROTATION")).0;
 /// Display 2 MADCTL register value parsed at compile-time.
-pub const GAUGE2_MADCTL: u8 = parse_rotation_config(env!("GUAGE2_ROTATION")).1;
+pub const GAUGE2_MADCTL: u8 = parse_rotation_config(env!("GAUGE2_ROTATION")).1;
+
+/// Name of the gauge 1.
+pub const GAUGE1_NAME: &str = env!("GAUGE1_NAME");
+/// Name of the gauge 2.
+pub const GAUGE2_NAME: &str = env!("GAUGE2_NAME");
 
 const fn parse_hex_digit(c: u8) -> Option<u8> {
     match c {
@@ -62,6 +67,7 @@ const fn parse_rotation_config(val: &str) -> (DisplayRotation, u8) {
 }
 
 /// Short host label derived from a metrics URL (e.g. `node1` from `https://node1.homin.dev/metrics`).
+#[allow(dead_code)]
 pub fn host_label(url: &str) -> &str {
     let rest = url
         .strip_prefix("https://")

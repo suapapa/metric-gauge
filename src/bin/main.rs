@@ -14,7 +14,7 @@ use embassy_net::{DhcpConfig, Runner, Stack, StackResources};
 use embassy_time::{Delay, Duration, Timer};
 use embedded_hal_bus::spi::RefCellDevice;
 use metric_gauge::{
-    config::{self, GAUGE1_URL, GAUGE2_URL, PASS, SSID},
+    config::{self, GAUGE1_URL, GAUGE2_URL, GAUGE1_NAME, GAUGE2_NAME, PASS, SSID},
     http::fetch_prometheus,
     metrics::CpuHistory,
     render::{BandBuffer, render_gauge_bands},
@@ -236,8 +236,8 @@ async fn main(spawner: Spawner) -> ! {
     wait_for_connection(stack).await;
     println!("network up");
 
-    let host1 = config::host_label(GAUGE1_URL);
-    let host2 = config::host_label(GAUGE2_URL);
+    let host1 = GAUGE1_NAME;
+    let host2 = GAUGE2_NAME;
     let mut hist1 = CpuHistory::default();
     let mut hist2 = CpuHistory::default();
 
