@@ -2,7 +2,7 @@
 
 ESP32-C3 Super Mini + dual **GC9A01** round LCDs (240×240). Each display shows a circle gauge with **CPU** and **MEM** from a Prometheus metrics URL (node-exporter or mon64 export).
 
-Related desktop/reference renderer: `_ref/` (ignored by git). Metric source sibling project: [`../mon64`](../mon64).
+Metric source sibling project: [mon64](https://github.com/suapapa/mon64).
 
 ## Hardware
 
@@ -11,7 +11,7 @@ Related desktop/reference renderer: `_ref/` (ignored by git). Metric source sibl
 | MCU | ESP32-C3 Super Mini |
 | Displays | 2× GC9A01 1.28″ round TFT, **4-wire SPI** |
 
-GC9A01 modules often label MOSI/SCK as **SDA/SCL**. That is still SPI, not I²C.
+> GC9A01 modules often label MOSI/SCK as **SDA/SCL**. That is still SPI, not I²C.
 
 ### Pin map
 
@@ -81,4 +81,3 @@ espflash flash --monitor --chip esp32c3 \
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
