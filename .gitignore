@@ -35,5 +35,6 @@ _autosave-*
 *.bak
 *.lck
 fp-info-cache
+hw/.history/
 
 *.zip
