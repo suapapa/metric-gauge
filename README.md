@@ -41,23 +41,26 @@ Compile-time env vars (required for a useful image):
 | `SSID` | — | Wi-Fi SSID |
 | `PASS` | `PASSWORD` | Wi-Fi password |
 | `GUAGE1_PROM_METRIC` | `GAUGE1_PROM_METRIC` | Prometheus URL for display 1 |
-| `GUAGE2_PROM_METRIC` | `GAUGE2_PROM_METRIC` | Prometheus URL for display 2 |
+| `GUAGE2_PROM_METRIC` | `GUAGE2_PROM_METRIC` | Prometheus URL for display 2 |
 | `GUAGE1_ROTATION` | `GAUGE1_ROTATION` | Rotation for display 1 (`0`, `90`, `180`, `270` or `RotateX`) |
 | `GUAGE2_ROTATION` | `GAUGE2_ROTATION` | Rotation for display 2 (`0`, `90`, `180`, `270` or `RotateX`) |
 
+Copy `.env.sample` to `.env` and edit it to fit your configuration:
+
 ```bash
-SSID=myssid PASS=secret \
-GUAGE1_PROM_METRIC=https://node1.homin.dev/metrics \
-GUAGE2_PROM_METRIC=https://node2.homin.dev/metrics \
-cargo run --release
+cp .env.sample .env
+# Edit the .env file to set your SSID, PASS, and metrics endpoints
 ```
 
-`cargo run` uses the runner in `.cargo/config.toml` (`espflash flash --monitor --chip esp32c3`).
+Run and flash directly (uses the runner in `.cargo/config.toml` to call `espflash flash --monitor --chip esp32c3`):
+
+```bash
+cargo run --release
+```
 
 Build only:
 
 ```bash
-SSID=… PASS=… GUAGE1_PROM_METRIC=… GUAGE2_PROM_METRIC=… \
 cargo build --release
 ```
 

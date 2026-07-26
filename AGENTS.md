@@ -71,17 +71,15 @@ See comments in `src/bin/main.rs` and `README.md`:
 ## Commands
 
 ```bash
-# Check / build (env required for real URLs; empty placeholders still compile with warnings)
-SSID=… PASS=… \
-GUAGE1_PROM_METRIC=https://…/metrics \
-GUAGE2_PROM_METRIC=https://…/metrics \
+# Copy .env.sample to .env and edit it to set your credentials/metrics endpoints
+cp .env.sample .env
+
+# Check / build
 cargo check --release
 
-SSID=… PASS=… GUAGE1_PROM_METRIC=… GUAGE2_PROM_METRIC=… \
 cargo build --release
 
 # Flash + serial monitor (default runner)
-SSID=… PASS=… GUAGE1_PROM_METRIC=… GUAGE2_PROM_METRIC=… \
 cargo run --release
 ```
 
