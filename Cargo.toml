@@ -1,11 +1,11 @@
 [package]
 edition      = "2024"
-name         = "esp-dual-gauge"
+name         = "metric-gauge"
 rust-version = "1.88"
 version      = "0.1.0"
 
 [[bin]]
-name = "esp-dual-gauge"
+name = "metric-gauge"
 path = "./src/bin/main.rs"
 
 [dependencies]

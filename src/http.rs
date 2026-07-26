@@ -190,7 +190,7 @@ where
     let _ = req.push_str(path);
     let _ = req.push_str(" HTTP/1.0\r\nHost: ");
     let _ = req.push_str(host);
-    let _ = req.push_str("\r\nUser-Agent: esp-dual-gauge\r\nConnection: close\r\n\r\n");
+    let _ = req.push_str("\r\nUser-Agent: metric-gauge\r\nConnection: close\r\n\r\n");
 
     if let Err(e) = stream.write_all(req.as_bytes()).await {
         println!("http write: {e:?}");

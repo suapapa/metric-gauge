@@ -1,10 +1,10 @@
-# AGENTS.md — esp-dual-gauge agent guide
+# AGENTS.md — metric-gauge agent guide
 
 Orientation for automated agents (and humans) working on this firmware.
 
 ## Project summary
 
-**esp-dual-gauge** is a `no_std` Embassy / esp-hal firmware for **ESP32-C3 Super Mini** that:
+**metric-gauge** is a `no_std` Embassy / esp-hal firmware for **ESP32-C3 Super Mini** that:
 
 1. Joins Wi-Fi using compile-time `SSID` / `PASS`
 2. HTTPS-GETs two Prometheus endpoints (`GUAGE1_PROM_METRIC`, `GUAGE2_PROM_METRIC`)

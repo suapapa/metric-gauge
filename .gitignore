@@ -27,3 +27,13 @@ target/
 _ref/
 .env
 .env.local
+
+# KiCad files (e.g. in hw/ metric-gauge)
+*.kicad_prl
+*-backups/
+_autosave-*
+*.bak
+*.lck
+fp-info-cache
+
+*.zip

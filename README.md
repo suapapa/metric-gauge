@@ -1,4 +1,4 @@
-# esp-dual-gauge
+# metric-gauge
 
 ESP32-C3 Super Mini + dual **GC9A01** round LCDs (240×240). Each display shows a circle gauge with **CPU** and **MEM** from a Prometheus metrics URL (node-exporter or mon64 export).
 
@@ -65,7 +65,7 @@ Flash an already-built binary:
 
 ```bash
 espflash flash --monitor --chip esp32c3 \
-  target/riscv32imc-unknown-none-elf/release/esp-dual-gauge
+  target/riscv32imc-unknown-none-elf/release/metric-gauge
 ```
 
 ### Metrics notes

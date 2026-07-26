@@ -13,7 +13,7 @@ use embassy_executor::Spawner;
 use embassy_net::{DhcpConfig, Runner, Stack, StackResources};
 use embassy_time::{Delay, Duration, Timer};
 use embedded_hal_bus::spi::RefCellDevice;
-use esp_dual_gauge::{
+use metric_gauge::{
     config::{self, GAUGE1_URL, GAUGE2_URL, PASS, SSID},
     http::fetch_prometheus,
     metrics::CpuHistory,
@@ -151,7 +151,7 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
     esp_println::logger::init_logger_from_env();
-    println!("esp-dual-gauge boot");
+    println!("metric-gauge boot");
     println!("SSID len={} PASS len={}", SSID.len(), PASS.len());
     println!("gauge1={GAUGE1_URL}");
     println!("gauge2={GAUGE2_URL}");
