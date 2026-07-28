@@ -1,9 +1,9 @@
 z=1.5;
 pw=78.74;
 ph=41.91;
-plw=89.7;
+plw=89.74;
 plh=63;
-g=(plw-pw)/2;
+g=(plw-pw)/2; // 5.5
 
 difference() {
     union() {

@@ -13,6 +13,8 @@ union() {
         
         translate([0,-15,0]) cb(14.2, 3.2);
         translate([0,-15,0]) cb(13, 5.7);
+        
+        #translate([0,-30,30]) cube([20,50,20], center=true);
     }
     apillas(hw, hh);
 }
