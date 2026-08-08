@@ -14,7 +14,7 @@ union() {
         translate([0,-15,0]) cb(14.2, 3.2);
         translate([0,-15,0]) cb(13, 5.7);
         
-        #translate([0,-30,30]) cube([20,50,20], center=true);
+        // #translate([0,-30,30]) cube([20,50,20], center=true);
     }
     apillas(hw, hh);
 }
@@ -46,7 +46,7 @@ module apillas(w, h, r=5){
         translate([0, h, -10]) rotate([-a,0,0]) translate([0,0,1]) cylinder(70, hr, hr, $fn=6);
         translate([w, h, -10]) rotate([-a,0,0]) translate([0,0,1]) cylinder(70, hr, hr, $fn=6);
         translate([-200,-200,-400]) cube(400);
-        translate([-200,-200,90-6.8]) rotate([-a,0,0]) cube(400);
+        #translate([-200,-200,90-6.8-2.5]) rotate([-a,0,0]) cube(400);
     }
 }
 

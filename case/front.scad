@@ -7,7 +7,7 @@ g=(plw-pw)/2; // 5.5
 
 difference() {
     union() {
-        translate([g,g,0]) pillas(pw,ph,5.2,3);
+        translate([g,g,0]) pillas(pw,ph,5.2+2.2+0.5,3);
         plate(plw,plh,2);
     }
     translate([g,g,-2]) pillas(pw,ph,10,1.7);
@@ -26,7 +26,7 @@ module pillas(w, h, z, r) {
 }
 
 module plate(w, h, r) {
-    z=1.5;
+    z=1.5+0.5;
     linear_extrude(z) hull() {
         translate([r,r,0]) circle(r,$fn=20);
         translate([r,h-r,0]) circle(r,$fn=20);
@@ -38,6 +38,6 @@ module plate(w, h, r) {
 module lcdholes() {
     h=20.955;
     w=38.1;
-    translate([(plw-w)/2,h,-0.4]) cylinder(2, 35/2, 32.4/2,$fn=120);
-    translate([(plw-w)/2+w,h,-0.4]) cylinder(2, 35/2, 32.4/2,$fn=120);
+    translate([(plw-w)/2,h,-0.4]) cylinder(3, 35/2, 32/2,$fn=120);
+    translate([(plw-w)/2+w,h,-0.4]) cylinder(3, 35/2, 32/2,$fn=120);
 }
