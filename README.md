@@ -1,4 +1,6 @@
-# metric-gauge
+# Metric Gauge
+
+![metric-gauge](_img/metric-gauge.webp)
 
 ESP32-C3 Super Mini + dual **GC9A01** round LCDs (240×240). Each display shows a circle gauge with **CPU** and **MEM** from a Prometheus metrics URL (node-exporter or mon64 export).
 
