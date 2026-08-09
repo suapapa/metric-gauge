@@ -17,7 +17,7 @@ use metric_gauge::{
     config::{self, GAUGE1_URL, GAUGE2_URL, GAUGE1_NAME, GAUGE2_NAME, PASS, SSID},
     http::fetch_prometheus,
     metrics::CpuHistory,
-    render::{BandBuffer, render_gauge_bands},
+    render::{FrameBuffer, render_gauge},
 };
 use esp_hal::{
     clock::CpuClock,
@@ -209,10 +209,10 @@ async fn main(spawner: Spawner) -> ! {
     let _ = display2.init(&mut blocking_delay);
     println!("displays ready");
 
-    static BAND: StaticCell<BandBuffer> = StaticCell::new();
-    let band = BAND.init_with(BandBuffer::new);
-    paint_gauge(&mut display1, band, Some(0.0), Some(0.0), "boot", true);
-    paint_gauge(&mut display2, band, Some(0.0), Some(0.0), "boot", true);
+    static FB: StaticCell<FrameBuffer> = StaticCell::new();
+    let fb = FB.init_with(FrameBuffer::new);
+    paint_gauge(&mut display1, fb, Some(0.0), Some(0.0), "boot", true);
+    paint_gauge(&mut display2, fb, Some(0.0), Some(0.0), "boot", true);
 
     // --- Wi-Fi ---
     let rng = Rng::new();
@@ -220,6 +220,11 @@ async fn main(spawner: Spawner) -> ! {
         esp_radio::wifi::new(peripherals.WIFI, Default::default()).expect("Wi-Fi init");
 
     let wifi_interface = interfaces.station;
+    let mac = wifi_interface.mac_address();
+    println!(
+        "STA MAC {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    );
     let net_seed = u64::from(rng.random()) | (u64::from(rng.random()) << 32);
     let tls_seed = u64::from(rng.random()) | (u64::from(rng.random()) << 32);
 
@@ -250,7 +255,7 @@ async fn main(spawner: Spawner) -> ! {
 
         paint_gauge(
             &mut display1,
-            band,
+            fb,
             stats1.cpu_percent,
             stats1.mem_percent,
             host1,
@@ -258,7 +263,7 @@ async fn main(spawner: Spawner) -> ! {
         );
         paint_gauge(
             &mut display2,
-            band,
+            fb,
             stats2.cpu_percent,
             stats2.mem_percent,
             host2,
@@ -276,7 +281,7 @@ async fn main(spawner: Spawner) -> ! {
 
 fn paint_gauge<I>(
     display: &mut Gc9a01<I, DisplayResolution240x240, gc9a01::mode::BasicMode>,
-    band: &mut BandBuffer,
+    fb: &mut FrameBuffer,
     cpu: Option<f32>,
     mem: Option<f32>,
     hostname: &str,
@@ -284,13 +289,10 @@ fn paint_gauge<I>(
 ) where
     I: display_interface::WriteOnlyDataCommand,
 {
-    render_gauge_bands(band, cpu, mem, hostname, reachable, |b| {
-        let y0 = b.y0 as u16;
-        let y1 = (b.y0 + b.height as i32 - 1) as u16;
-        // MemoryWrite (0x2C) must precede pixels; draw_buffer skips it.
-        let mut colors = b.row_slice().iter().copied();
-        let _ = display.set_pixels((0, y0), (239, y1), &mut colors);
-    });
+    render_gauge(fb, cpu, mem, hostname, reachable);
+    // MemoryWrite (0x2C) must precede pixels; draw_buffer skips it.
+    let mut colors = fb.pixels.iter().copied();
+    let _ = display.set_pixels((0, 0), (239, 239), &mut colors);
 }
 
 async fn wait_for_connection(stack: Stack<'_>) {

@@ -1,6 +1,6 @@
 //! 240×240 circle gauge renderer (RGB565), ported from mon64/`_ref`.
 //!
-//! Renders in horizontal bands to keep RAM small on ESP32-C3.
+//! Uses one full framebuffer (shared across both LCDs; painted sequentially).
 
 use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_10X20},
@@ -11,8 +11,8 @@ use embedded_graphics::{
 use libm::{cosf, sinf, sqrtf};
 
 pub const SIZE: usize = 240;
-pub const BAND_HEIGHT: usize = 40;
 const CENTER: i32 = SIZE as i32 / 2;
+const PIXEL_COUNT: usize = SIZE * SIZE;
 
 #[derive(Clone, Copy)]
 pub struct Rgba {
@@ -45,39 +45,27 @@ const LOAD_GREEN: Rgba = Rgba::new(0x44, 0xcc, 0x66, 255);
 const LOAD_ORANGE: Rgba = Rgba::new(0xff, 0xaa, 0x33, 255);
 const LOAD_RED: Rgba = Rgba::new(0xff, 0x44, 0x44, 255);
 
-/// One horizontal band of the 240×240 framebuffer.
-pub struct BandBuffer {
-    pub y0: i32,
-    pub height: usize,
-    pub pixels: [u16; SIZE * BAND_HEIGHT],
+/// Full 240×240 RGB565 framebuffer.
+pub struct FrameBuffer {
+    pub pixels: [u16; PIXEL_COUNT],
 }
 
-impl BandBuffer {
+impl FrameBuffer {
     pub fn new() -> Self {
         Self {
-            y0: 0,
-            height: BAND_HEIGHT,
-            pixels: [0; SIZE * BAND_HEIGHT],
+            pixels: [0; PIXEL_COUNT],
         }
     }
 
-    pub fn prepare(&mut self, y0: i32, height: usize) {
-        self.y0 = y0;
-        self.height = height.min(BAND_HEIGHT);
-        let c = BG.to_rgb565();
-        let n = SIZE * self.height;
-        self.pixels[..n].fill(c);
+    pub fn clear(&mut self) {
+        self.pixels.fill(BG.to_rgb565());
     }
 
     fn set_rgba(&mut self, x: i32, y: i32, col: Rgba) {
-        if x < 0 || x >= SIZE as i32 {
+        if x < 0 || x >= SIZE as i32 || y < 0 || y >= SIZE as i32 {
             return;
         }
-        let ly = y - self.y0;
-        if ly < 0 || ly >= self.height as i32 {
-            return;
-        }
-        let i = ly as usize * SIZE + x as usize;
+        let i = y as usize * SIZE + x as usize;
         if col.a == 255 {
             self.pixels[i] = col.to_rgb565();
             return;
@@ -88,19 +76,15 @@ impl BandBuffer {
         let dst = from_rgb565(self.pixels[i]);
         self.pixels[i] = blend(dst, col).to_rgb565();
     }
-
-    pub fn row_slice(&self) -> &[u16] {
-        &self.pixels[..SIZE * self.height]
-    }
 }
 
-impl Default for BandBuffer {
+impl Default for FrameBuffer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl DrawTarget for BandBuffer {
+impl DrawTarget for FrameBuffer {
     type Color = Rgb565;
     type Error = core::convert::Infallible;
 
@@ -111,9 +95,8 @@ impl DrawTarget for BandBuffer {
         for Pixel(coord, color) in pixels {
             let x = coord.x;
             let y = coord.y;
-            let ly = y - self.y0;
-            if (0..SIZE as i32).contains(&x) && ly >= 0 && ly < self.height as i32 {
-                let i = ly as usize * SIZE + x as usize;
+            if (0..SIZE as i32).contains(&x) && (0..SIZE as i32).contains(&y) {
+                let i = y as usize * SIZE + x as usize;
                 self.pixels[i] = color.into_storage();
             }
         }
@@ -121,20 +104,19 @@ impl DrawTarget for BandBuffer {
     }
 }
 
-impl OriginDimensions for BandBuffer {
+impl OriginDimensions for FrameBuffer {
     fn size(&self) -> Size {
         Size::new(SIZE as u32, SIZE as u32)
     }
 }
 
-/// Callback receives each filled band ready to flush to the LCD.
-pub fn render_gauge_bands(
-    band: &mut BandBuffer,
+/// Render the gauge into `fb` (caller flushes to the LCD).
+pub fn render_gauge(
+    fb: &mut FrameBuffer,
     cpu: Option<f32>,
     mem: Option<f32>,
     hostname: &str,
     reachable: bool,
-    mut flush: impl FnMut(&BandBuffer),
 ) {
     let (cpu_val, cpu_ok) = match (reachable, cpu) {
         (false, _) => (0.0, false),
@@ -165,24 +147,16 @@ pub fn render_gauge_bands(
     let cpu_text = format_percent(cpu_val, cpu_ok);
     let mem_text = format_percent(mem_val, mem_ok);
 
-    let mut y0 = 0i32;
-    while y0 < SIZE as i32 {
-        let height = ((SIZE as i32) - y0).min(BAND_HEIGHT as i32) as usize;
-        band.prepare(y0, height);
+    fb.clear();
+    draw_grid(fb);
+    draw_gauge_arc(fb, cpu_val, cpu_color, deg(175.0), deg(5.0));
+    draw_gauge_arc(fb, mem_val, mem_color, deg(185.0), deg(355.0));
 
-        draw_grid(band);
-        draw_gauge_arc(band, cpu_val, cpu_color, deg(175.0), deg(5.0));
-        draw_gauge_arc(band, mem_val, mem_color, deg(185.0), deg(355.0));
-
-        draw_label(band, "CPU", cpu_color, CENTER, 46, false);
-        draw_label(band, &cpu_text, cpu_color, CENTER, 78, true);
-        draw_label(band, host_text, host_col, CENTER, 120, false);
-        draw_label(band, &mem_text, mem_color, CENTER, 162, true);
-        draw_label(band, "MEM", mem_color, CENTER, 194, false);
-
-        flush(band);
-        y0 += height as i32;
-    }
+    draw_label(fb, "CPU", cpu_color, CENTER, 46, false);
+    draw_label(fb, &cpu_text, cpu_color, CENTER, 78, true);
+    draw_label(fb, host_text, host_col, CENTER, 120, false);
+    draw_label(fb, &mem_text, mem_color, CENTER, 162, true);
+    draw_label(fb, "MEM", mem_color, CENTER, 194, false);
 }
 
 fn format_percent(v: f32, ok: bool) -> heapless::String<8> {
@@ -262,7 +236,7 @@ where
     }
 }
 
-fn draw_label(fb: &mut BandBuffer, text: &str, col: Rgba, cx: i32, cy: i32, big: bool) {
+fn draw_label(fb: &mut FrameBuffer, text: &str, col: Rgba, cx: i32, cy: i32, big: bool) {
     let color = Rgb565::new(col.r >> 3, col.g >> 2, col.b >> 3);
     if big {
         let style = MonoTextStyle::new(&FONT_10X20, color);
@@ -319,7 +293,7 @@ fn deg(d: f32) -> f32 {
     d * core::f32::consts::PI / 180.0
 }
 
-fn draw_grid(fb: &mut BandBuffer) {
+fn draw_grid(fb: &mut FrameBuffer) {
     let step = 20;
     for x in (0..SIZE as i32).step_by(step) {
         draw_vline(fb, x, 0, SIZE as i32 - 1, GRID);
@@ -338,7 +312,7 @@ fn draw_grid(fb: &mut BandBuffer) {
     }
 }
 
-fn draw_gauge_arc(fb: &mut BandBuffer, value: f32, accent: Rgba, start: f32, end: f32) {
+fn draw_gauge_arc(fb: &mut FrameBuffer, value: f32, accent: Rgba, start: f32, end: f32) {
     const RADIUS: f32 = 102.0;
     const TRACK_W: f32 = 4.0;
     const ACTIVE_W: f32 = 7.0;
@@ -370,7 +344,7 @@ fn draw_gauge_arc(fb: &mut BandBuffer, value: f32, accent: Rgba, start: f32, end
 
 #[allow(clippy::too_many_arguments)]
 fn draw_arc(
-    fb: &mut BandBuffer,
+    fb: &mut FrameBuffer,
     cx: f32,
     cy: f32,
     radius: f32,
@@ -391,10 +365,10 @@ fn draw_arc(
     }
 }
 
-fn fill_circle(fb: &mut BandBuffer, cx: i32, cy: i32, radius: i32, col: Rgba) {
+fn fill_circle(fb: &mut FrameBuffer, cx: i32, cy: i32, radius: i32, col: Rgba) {
     let r_f = radius as f32;
-    let y_lo = (cy - radius - 1).max(fb.y0);
-    let y_hi = (cy + radius + 1).min(fb.y0 + fb.height as i32 - 1);
+    let y_lo = (cy - radius - 1).max(0);
+    let y_hi = (cy + radius + 1).min(SIZE as i32 - 1);
     for y in y_lo..=y_hi {
         for x in (cx - radius - 1)..=(cx + radius + 1) {
             if x < 0 || x >= SIZE as i32 {
@@ -439,12 +413,12 @@ fn blend(dst: Rgba, src: Rgba) -> Rgba {
     }
 }
 
-fn draw_vline(fb: &mut BandBuffer, x: i32, mut y0: i32, mut y1: i32, col: Rgba) {
+fn draw_vline(fb: &mut FrameBuffer, x: i32, mut y0: i32, mut y1: i32, col: Rgba) {
     if y0 > y1 {
         core::mem::swap(&mut y0, &mut y1);
     }
-    y0 = y0.max(fb.y0);
-    y1 = y1.min(fb.y0 + fb.height as i32 - 1);
+    y0 = y0.max(0);
+    y1 = y1.min(SIZE as i32 - 1);
     for y in y0..=y1 {
         if in_circle(x, y) {
             fb.set_rgba(x, y, col);
@@ -452,8 +426,8 @@ fn draw_vline(fb: &mut BandBuffer, x: i32, mut y0: i32, mut y1: i32, col: Rgba) 
     }
 }
 
-fn draw_hline(fb: &mut BandBuffer, mut x0: i32, mut x1: i32, y: i32, col: Rgba) {
-    if y < fb.y0 || y >= fb.y0 + fb.height as i32 {
+fn draw_hline(fb: &mut FrameBuffer, mut x0: i32, mut x1: i32, y: i32, col: Rgba) {
+    if !(0..SIZE as i32).contains(&y) {
         return;
     }
     if x0 > x1 {

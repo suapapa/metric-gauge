@@ -81,6 +81,7 @@ espflash flash --monitor --chip esp32c3 \
 - Supports **node-exporter** (`node_cpu_seconds_total`, `node_memory_MemTotal_bytes` / `MemAvailable_bytes`) and **mon64** gauges (`mon64_node_cpu_percent`, `mon64_node_mem_used_percent`, …).
 - Node-exporter CPU needs two samples: first scrape shows `n/a` for CPU, then deltas work.
 - Hostname label on the gauge is configured via `GAUGE1_NAME` and `GAUGE2_NAME` (e.g. `node1`, `node2`).
+- Displays share one static 240×240 RGB565 framebuffer (~112 KiB); both LCDs are painted sequentially over the shared SPI bus.
 
 ## License
 

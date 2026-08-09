@@ -11,7 +11,7 @@ Orientation for automated agents (and humans) working on this firmware.
 3. Parses CPU % + MEM % (node-exporter or mon64 export)
 4. Draws a 240×240 dual-arc circle gauge on each of two **GC9A01** SPI LCDs
 
-Visual / layout reference: `_ref/` (Rust host renderer + Lottie; **not** linked into firmware) and `../mon64/internal/badge/circle240.go`. Firmware uses a lightweight band renderer instead of Lottie/TTF.
+Visual / layout reference: `_ref/` (Rust host renderer + Lottie; **not** linked into firmware) and `../mon64/internal/badge/circle240.go`. Firmware uses a lightweight full-framebuffer renderer instead of Lottie/TTF.
 
 User-facing pin map and flash steps: `README.md`.
 
@@ -23,7 +23,7 @@ User-facing pin map and flash steps: `README.md`.
 | HAL / RTOS | `esp-hal` ~1.1, `esp-rtos` 0.3, `esp-radio` 0.18 |
 | Async | Embassy (`embassy-executor`, `embassy-net`, `embassy-time`) |
 | Display | `gc9a01-rs` 0.4 + shared SPI via `embedded-hal-bus` `RefCellDevice` |
-| Graphics | Custom RGB565 band renderer + `embedded-graphics` mono fonts |
+| Graphics | Custom RGB565 full-framebuffer renderer + `embedded-graphics` mono fonts |
 | HTTPS | Manual HTTP/1.1 + `embedded-tls` 0.19 (`default-features = false`, `NoVerify` / `UnsecureProvider`) |
 | Logging | `esp-println` + `log` |
 
@@ -37,7 +37,7 @@ src/lib.rs        Module exports
 src/config.rs     env!("…") constants + host_label()
 src/http.rs       DNS + TCP + TLS + streaming HTTP GET
 src/metrics.rs    Streaming Prometheus line parser + CPU delta history
-src/render.rs     Banded circle-gauge drawing (RGB565)
+src/render.rs     Full 240×240 circle-gauge drawing (RGB565)
 build.rs          Linker helpers + rustc-env from SSID/PASS/GAUGE*
 _ref/             Host-side reference (gitignored) — Lottie/fontdue; do not embed on device
 assets/           SUIT TTF copies (too large for firmware; unused by device build)
@@ -48,7 +48,7 @@ assets/           SUIT TTF copies (too large for firmware; unused by device buil
 
 1. **SPI, not I²C**: GC9A01 is 4-wire SPI. Pin labels SDA/SCL on cheap modules mean MOSI/SCK.
 2. **Shared SPI bus**: One `Spi` in a `RefCell`, two `RefCellDevice`s with separate CS (+ separate DC pins). Shared RST/BL.
-3. **RAM**: Full 240×240×2 framebuffer (~112 KiB) does not fit with Wi-Fi + TLS on C3. Render in **40-px horizontal bands** (`BandBuffer` / `render_gauge_bands`) and `set_draw_area` + `draw_buffer` per band.
+3. **RAM**: One shared full 240×240×2 framebuffer (~112 KiB, `FrameBuffer` / `render_gauge`) in `.bss`; both LCDs reuse it (sequential paint). Two full buffers (~225 KiB) do not leave enough headroom with Wi-Fi heap.
 4. **Large HTTPS bodies**: node-exporter `/metrics` can be ~100–200 KiB. Never buffer the whole body; stream into `MetricsParser` (line accumulator ≤256 B).
 5. **CPU % (node-exporter)**: Sum all `node_cpu_seconds_total` and idle-mode samples; usage = `100 * (1 - Δidle/Δtotal)` between scrapes. First scrape → CPU `None` / UI `n/a`.
 6. **mon64 export**: If `mon64_node_cpu_percent` / `mon64_node_mem_used_percent` appear, prefer those (no delta).
@@ -90,7 +90,7 @@ Clippy: crate denies `clippy::large_stack_frames` and `clippy::mem_forget` in `m
 - Prefer small, focused diffs; match existing module split (`http` / `metrics` / `render`).
 - Changing pins: update `main.rs`, `README.md`, and this file together.
 - Adding scrape fields: extend `MetricsParser` only; keep streaming.
-- Display work: keep band height × width × 2 within a few tens of KiB; avoid a second full framebuffer.
+- Display work: keep a single full framebuffer; avoid a second 240×240×2 buffer alongside Wi-Fi heap.
 - Do not enable `embedded-tls` default features (`std` / `tokio`).
 - Do not commit secrets; env vars are compile-time only and must not be hardcoded in source.
 
@@ -99,7 +99,7 @@ Clippy: crate denies `clippy::large_stack_frames` and `clippy::mem_forget` in `m
 - TLS verify disabled; no client certs.
 - Scrape interval fixed at 10 s in `main`.
 - Mono fonts only; no SUIT Heavy / glow.
-- Band redraw recomputes the whole gauge per band (correct but CPU-heavy); caching static layers is optional optimization.
+- Full-framebuffer redraw still recomputes the whole gauge each scrape; caching static layers is an optional optimization.
 - Dual-display SPI is blocking; no DMA yet.
 - `_ref` Lottie path is host-only; do not try to run `rasterlottie` on-device.
 
