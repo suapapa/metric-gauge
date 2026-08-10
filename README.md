@@ -77,7 +77,7 @@ espflash flash --monitor --chip esp32c3 \
 
 ### Metrics notes
 
-- Scrapes every **10 s** over HTTPS (TLS cert verification disabled).
+- Scrapes every **10 s** over HTTPS (TLS cert verification disabled). Each gauge keeps its TCP/TLS connection alive between scrapes when the server allows HTTP/1.1 keep-alive.
 - Supports **node-exporter** (`node_cpu_seconds_total`, `node_memory_MemTotal_bytes` / `MemAvailable_bytes`) and **mon64** gauges (`mon64_node_cpu_percent`, `mon64_node_mem_used_percent`, …).
 - Node-exporter CPU needs two samples: first scrape shows `n/a` for CPU, then deltas work.
 - Hostname label on the gauge is configured via `GAUGE1_NAME` and `GAUGE2_NAME` (e.g. `node1`, `node2`).

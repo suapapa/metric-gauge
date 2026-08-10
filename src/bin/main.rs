@@ -248,9 +248,9 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut tls_seed = tls_seed;
     loop {
-        let stats1 = fetch_prometheus(stack, tls_seed, GAUGE1_URL, &mut hist1).await;
+        let stats1 = fetch_prometheus(stack, 0, tls_seed, GAUGE1_URL, &mut hist1).await;
         tls_seed = tls_seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let stats2 = fetch_prometheus(stack, tls_seed, GAUGE2_URL, &mut hist2).await;
+        let stats2 = fetch_prometheus(stack, 1, tls_seed, GAUGE2_URL, &mut hist2).await;
         tls_seed = tls_seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
 
         paint_gauge(
