@@ -5,12 +5,12 @@
       "Application": "Pcbnew",
       "Version": "10.0.0"
     },
-    "CreationDate": "2026-07-26T07:02:41+09:00"
+    "CreationDate": "2026-08-13T00:34:45+09:00"
   },
   "GeneralSpecs": {
     "ProjectId": {
       "Name": "metric-gauge",
-      "GUID": "65737033-322d-4647-9561-6c2d67617567",
+      "GUID": "6d657472-6963-42d6-9761-7567652e6b69",
       "Revision": "rev?"
     },
     "Size": {

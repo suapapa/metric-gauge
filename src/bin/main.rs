@@ -37,7 +37,7 @@ use esp_radio::wifi::{Config as WifiConfig, WifiController, sta::StationConfig};
 use gc9a01::{
     Gc9a01, SPIDisplayInterface, display::DisplayResolution240x240, mode::DisplayConfiguration,
 };
-use static_cell::StaticCell;
+use static_cell::{ConstStaticCell, StaticCell};
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -209,10 +209,27 @@ async fn main(spawner: Spawner) -> ! {
     let _ = display2.init(&mut blocking_delay);
     println!("displays ready");
 
-    static FB: StaticCell<FrameBuffer> = StaticCell::new();
-    let fb = FB.init_with(FrameBuffer::new);
-    paint_gauge(&mut display1, fb, Some(0.0), Some(0.0), "boot", true);
-    paint_gauge(&mut display2, fb, Some(0.0), Some(0.0), "boot", true);
+    // ConstStaticCell keeps the 112 KiB FB in .bss — never materialize it on stack.
+    static FB: ConstStaticCell<FrameBuffer> = ConstStaticCell::new(FrameBuffer::new());
+    let fb = FB.take();
+    paint_gauge(
+        &mut display1,
+        fb,
+        Some(0.0),
+        Some(0.0),
+        "boot",
+        true,
+        true,
+    );
+    paint_gauge(
+        &mut display2,
+        fb,
+        Some(0.0),
+        Some(0.0),
+        "boot",
+        true,
+        true,
+    );
 
     // --- Wi-Fi ---
     let rng = Rng::new();
@@ -247,7 +264,9 @@ async fn main(spawner: Spawner) -> ! {
     let mut hist2 = CpuHistory::default();
 
     let mut tls_seed = tls_seed;
+    let mut heartbeat = false;
     loop {
+        heartbeat = !heartbeat;
         let stats1 = fetch_prometheus(stack, 0, tls_seed, GAUGE1_URL, &mut hist1).await;
         tls_seed = tls_seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let stats2 = fetch_prometheus(stack, 1, tls_seed, GAUGE2_URL, &mut hist2).await;
@@ -260,6 +279,7 @@ async fn main(spawner: Spawner) -> ! {
             stats1.mem_percent,
             host1,
             stats1.reachable,
+            heartbeat,
         );
         paint_gauge(
             &mut display2,
@@ -268,6 +288,7 @@ async fn main(spawner: Spawner) -> ! {
             stats2.mem_percent,
             host2,
             stats2.reachable,
+            heartbeat,
         );
 
         println!(
@@ -286,10 +307,11 @@ fn paint_gauge<I>(
     mem: Option<f32>,
     hostname: &str,
     reachable: bool,
+    alive: bool,
 ) where
     I: display_interface::WriteOnlyDataCommand,
 {
-    render_gauge(fb, cpu, mem, hostname, reachable);
+    render_gauge(fb, cpu, mem, hostname, reachable, alive);
     // MemoryWrite (0x2C) must precede pixels; draw_buffer skips it.
     let mut colors = fb.pixels.iter().copied();
     let _ = display.set_pixels((0, 0), (239, 239), &mut colors);

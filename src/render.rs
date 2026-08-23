@@ -44,6 +44,7 @@ const LOAD_BLUE: Rgba = Rgba::new(0x33, 0x88, 0xff, 255);
 const LOAD_GREEN: Rgba = Rgba::new(0x44, 0xcc, 0x66, 255);
 const LOAD_ORANGE: Rgba = Rgba::new(0xff, 0xaa, 0x33, 255);
 const LOAD_RED: Rgba = Rgba::new(0xff, 0x44, 0x44, 255);
+const HEARTBEAT: Rgba = Rgba::new(0x44, 0xcc, 0x66, 255);
 
 /// Full 240×240 RGB565 framebuffer.
 pub struct FrameBuffer {
@@ -51,7 +52,7 @@ pub struct FrameBuffer {
 }
 
 impl FrameBuffer {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             pixels: [0; PIXEL_COUNT],
         }
@@ -111,12 +112,16 @@ impl OriginDimensions for FrameBuffer {
 }
 
 /// Render the gauge into `fb` (caller flushes to the LCD).
+///
+/// `alive` toggles a small green dot beside the hostname on each update so a
+/// frozen device is visible without serial logs.
 pub fn render_gauge(
     fb: &mut FrameBuffer,
     cpu: Option<f32>,
     mem: Option<f32>,
     hostname: &str,
     reachable: bool,
+    alive: bool,
 ) {
     let (cpu_val, cpu_ok) = match (reachable, cpu) {
         (false, _) => (0.0, false),
@@ -154,7 +159,7 @@ pub fn render_gauge(
 
     draw_label(fb, "CPU", cpu_color, CENTER, 46, false);
     draw_label(fb, &cpu_text, cpu_color, CENTER, 78, true);
-    draw_label(fb, host_text, host_col, CENTER, 120, false);
+    draw_host_label(fb, host_text, host_col, CENTER, 120, alive);
     draw_label(fb, &mem_text, mem_color, CENTER, 162, true);
     draw_label(fb, "MEM", mem_color, CENTER, 194, false);
 }
@@ -233,6 +238,19 @@ where
             }
         }
         Ok(())
+    }
+}
+
+fn draw_host_label(fb: &mut FrameBuffer, text: &str, col: Rgba, cx: i32, cy: i32, alive: bool) {
+    let color = Rgb565::new(col.r >> 3, col.g >> 2, col.b >> 3);
+    let style = MonoTextStyle::new(&FONT_10X20, color);
+    let width = text.len() as i32 * 10;
+    let x = cx - width / 2;
+    let y = cy - 10;
+    let _ = Text::with_baseline(text, Point::new(x, y), style, Baseline::Top).draw(fb);
+    if alive {
+        let dot_x = x + width + 6;
+        fill_circle(fb, dot_x, cy, 4, HEARTBEAT);
     }
 }
 

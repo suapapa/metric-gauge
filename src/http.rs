@@ -5,7 +5,6 @@
 //! buffers; main-task only (no concurrent scrapes).
 
 use crate::metrics::{CpuHistory, GaugeStats, MetricsParser};
-use core::mem::MaybeUninit;
 use embassy_net::{
     dns::DnsQueryType,
     tcp::TcpSocket,
@@ -24,6 +23,9 @@ use rand_core::SeedableRng;
 const TLS_RECORD_MAX: usize = 16_640;
 const TLS_TX: usize = 4096;
 const TCP_BUF: usize = 4096;
+/// node-exporter bodies can be ~200 KiB; cap reads so keep-alive without
+/// Content-Length cannot block forever waiting for EOF.
+const MAX_HTTP_BODY: usize = 512 * 1024;
 const ALPN_HTTP11: &[&[u8]] = &[b"http/1.1"];
 const SLOT_COUNT: usize = 2;
 
@@ -83,18 +85,12 @@ impl Slots {
 }
 
 // SAFETY: touched only from the main Embassy task.
-static mut SLOTS: MaybeUninit<Slots> = MaybeUninit::uninit();
-static mut SLOTS_READY: bool = false;
+// Const-init in .bss — do NOT `write(Slots::new())` at runtime; that briefly
+// materializes ~58 KiB on the task stack and overflows (esp-rtos stack check).
+static mut SLOTS: Slots = Slots::new();
 
 fn slots_mut() -> &'static mut Slots {
-    unsafe {
-        let p = core::ptr::addr_of_mut!(SLOTS);
-        if !*core::ptr::addr_of!(SLOTS_READY) {
-            (*p).write(Slots::new());
-            *core::ptr::addr_of_mut!(SLOTS_READY) = true;
-        }
-        (*p).assume_init_mut()
-    }
+    unsafe { &mut *core::ptr::addr_of_mut!(SLOTS) }
 }
 
 struct HttpResult {
@@ -226,7 +222,7 @@ async fn connect_and_get(
         Err(_) => {
             println!("tcp connect timeout {host}:{port}");
             socket.abort();
-            let _ = socket.flush().await;
+            flush_socket(&mut socket).await;
             return unreachable_stats();
         }
     }
@@ -324,7 +320,7 @@ async fn connect_and_get(
             }
             Ok(HttpResult { stats, .. }) => {
                 socket.abort();
-                let _ = socket.flush().await;
+                flush_socket(&mut socket).await;
                 Timer::after(Duration::from_millis(50)).await;
                 if stats.reachable {
                     stats
@@ -335,11 +331,19 @@ async fn connect_and_get(
             Err(_) => {
                 println!("http timeout {host}");
                 socket.abort();
-                let _ = socket.flush().await;
+                flush_socket(&mut socket).await;
                 Timer::after(Duration::from_millis(50)).await;
                 unreachable_stats()
             }
         }
+    }
+}
+
+async fn flush_socket(socket: &mut TcpSocket<'static>) {
+    match with_timeout(Duration::from_secs(2), socket.flush()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => println!("tcp flush: {e:?}"),
+        Err(_) => println!("tcp flush timeout"),
     }
 }
 
@@ -360,7 +364,7 @@ async fn drop_conn(slot: usize) {
             LiveConn::Tls(tls) => abort_tls(tls).await,
             LiveConn::Plain(mut sock) => {
                 sock.abort();
-                let _ = sock.flush().await;
+                flush_socket(&mut sock).await;
             }
         }
         Timer::after(Duration::from_millis(50)).await;
@@ -371,12 +375,12 @@ async fn abort_tls(tls: TlsConn) {
     match tls.close().await {
         Ok(mut socket) => {
             socket.abort();
-            let _ = socket.flush().await;
+            flush_socket(&mut socket).await;
         }
         Err((mut socket, e)) => {
             println!("tls close: {e:?}");
             socket.abort();
-            let _ = socket.flush().await;
+            flush_socket(&mut socket).await;
         }
     }
 }
@@ -524,12 +528,23 @@ async fn read_http_response<S: Read>(
         BodyKind::UntilEof => {
             parser.push(preamble);
             keep_alive = false;
+            let mut body_read = preamble.len();
             loop {
+                if body_read >= MAX_HTTP_BODY {
+                    println!("http body cap ({body_read}B)");
+                    break;
+                }
                 match stream.read(&mut buf).await {
                     Ok(0) => break,
                     Ok(n) => {
                         got += n;
-                        parser.push(&buf[..n]);
+                        let use_n = n.min(MAX_HTTP_BODY - body_read);
+                        parser.push(&buf[..use_n]);
+                        body_read += use_n;
+                        if use_n < n {
+                            println!("http body truncated after cap");
+                            break;
+                        }
                     }
                     Err(e) => {
                         println!("http read eof-body: {e:?} (got {got}B)");
@@ -803,7 +818,8 @@ fn parse_body_kind(headers: &[u8], peer_close: bool) -> BodyKind {
     } else if peer_close {
         BodyKind::UntilEof
     } else {
-        BodyKind::UntilEof
+        // Keep-alive without framing must not have a body (RFC 7230).
+        BodyKind::Length(0)
     }
 }
 
@@ -846,8 +862,8 @@ async fn resolve_host(stack: Stack<'_>, host: &str) -> Option<IpAddress> {
     }
 
     for attempt in 0..3u8 {
-        match stack.dns_query(host, DnsQueryType::A).await {
-            Ok(addrs) if !addrs.is_empty() => {
+        match with_timeout(Duration::from_secs(5), stack.dns_query(host, DnsQueryType::A)).await {
+            Ok(Ok(addrs)) if !addrs.is_empty() => {
                 let ip = addrs[0];
                 let mut name = heapless::String::new();
                 let _ = name.push_str(host);
@@ -858,8 +874,9 @@ async fn resolve_host(stack: Stack<'_>, host: &str) -> Option<IpAddress> {
                 }
                 return Some(ip);
             }
-            Ok(_) => println!("dns empty: {host} (try {attempt})"),
-            Err(e) => println!("dns_query: {e:?} (try {attempt})"),
+            Ok(Ok(_)) => println!("dns empty: {host} (try {attempt})"),
+            Ok(Err(e)) => println!("dns_query: {e:?} (try {attempt})"),
+            Err(_) => println!("dns timeout: {host} (try {attempt})"),
         }
         Timer::after(Duration::from_millis(200)).await;
     }
