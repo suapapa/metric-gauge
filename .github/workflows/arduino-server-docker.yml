@@ -1,0 +1,116 @@
+name: Arduino Server Docker
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "arduino/server/**"
+      - ".github/workflows/arduino-server-docker.yml"
+    tags:
+      - "arduino-server-v*"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository }}/metric-gauge_arduino-server
+
+concurrency:
+  group: arduino-server-docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tags
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            version="${GITHUB_REF#refs/tags/}"
+            echo "tags=${IMAGE}:${version}-${{ matrix.arch }}" >> "${GITHUB_OUTPUT}"
+          else
+            {
+              echo "tags<<EOF"
+              echo "${IMAGE}:latest-${{ matrix.arch }}"
+              echo "${IMAGE}:sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
+              echo "EOF"
+            } >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: arduino/server
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            BUILD_TIME=${{ github.event.head_commit.timestamp || github.run_started_at }}
+            GITHASH=${{ github.sha }}
+            BUILD_TAG=${{ github.ref_name }}
+
+  merge:
+    name: Merge manifest
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create multi-arch manifest
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            version="${GITHUB_REF#refs/tags/}"
+            docker buildx imagetools create \
+              -t "${IMAGE}:${version}" \
+              "${IMAGE}:${version}-amd64" \
+              "${IMAGE}:${version}-arm64"
+          else
+            docker buildx imagetools create \
+              -t "${IMAGE}:latest" \
+              -t "${IMAGE}:sha-${GITHUB_SHA::7}" \
+              "${IMAGE}:latest-amd64" \
+              "${IMAGE}:latest-arm64"
+          fi
