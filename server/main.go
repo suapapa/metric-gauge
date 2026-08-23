@@ -14,15 +14,16 @@ import (
 )
 
 var (
-	fSerialPort  string
-	fIntervalStr string
-
-	duration time.Duration
+	fSerialPort     string
+	fIntervalStr    string
+	fNodeExporter   string
+	duration        time.Duration
 )
 
 func main() {
 	flag.StringVar(&fSerialPort, "s", "/dev/ttyUSB0", "Serial port to use")
-	flag.StringVar(&fIntervalStr, "i", "5s", "Interval to update gauges")
+	flag.StringVar(&fIntervalStr, "i", "15s", "Interval to update gauges")
+	flag.StringVar(&fNodeExporter, "nodeexporter", "", "node-exporter /metrics URL (disables local gopsutil)")
 	flag.Parse()
 
 	log.Println("Opening serial port...")
@@ -38,7 +39,14 @@ func main() {
 
 	ctx, cancelF := context.WithCancel(context.Background())
 	defer cancelF()
-	mCh := getMetrics(ctx)
+
+	var mCh chan *Metrics
+	if fNodeExporter != "" {
+		log.Printf("Using node-exporter endpoint: %s", fNodeExporter)
+		mCh = getNodeExporterMetrics(ctx, fNodeExporter)
+	} else {
+		mCh = getMetrics(ctx)
+	}
 
 	log.Println("Updating gauges...")
 	go func(ctx context.Context) {

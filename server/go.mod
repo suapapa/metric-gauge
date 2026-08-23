@@ -1,6 +1,6 @@
-module github.com/suapapa/metric_gauge
+module github.com/suapapa/metric-gauge_server
 
-go 1.19
+go 1.27
 
 require (
 	github.com/shirou/gopsutil/v3 v3.23.1
@@ -14,5 +14,5 @@ require (
 	github.com/tklauser/go-sysconf v0.3.11 // indirect
 	github.com/tklauser/numcpus v0.6.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
-	golang.org/x/sys v0.4.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 )
